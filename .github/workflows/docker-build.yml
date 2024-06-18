@@ -36,4 +36,4 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
         env:
           REPO: ${{ github.repository }}
-          TOKEN: ${{ secrets.TOKEN }}
+          TOKEN: ${{ secrets.RUNNER_TOKEN }}
