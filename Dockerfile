@@ -16,10 +16,10 @@ RUN apt update -y && apt upgrade -y && \
     tar xzf ./actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz && \
     chown -R docker ~docker && /home/docker/actions-runner/bin/installdependencies.sh
 
-COPY /scripts/start.sh /home/docker/start.sh
+COPY /scripts/ /home/docker/scripts/
 
-RUN chmod +x /home/docker/start.sh
+RUN chmod +x /home/docker/scripts/start.sh
 
 USER docker
 
-ENTRYPOINT ["/home/docker/start.sh"]
+ENTRYPOINT ["/home/docker/scripts/start.sh"]
