@@ -16,7 +16,7 @@ RUN apt update -y && apt upgrade -y && \
     tar xzf ./actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz && \
     chown -R docker ~docker && /home/docker/actions-runner/bin/installdependencies.sh
 
-COPY start.sh /home/docker/start.sh
+COPY ./start.sh /home/docker/start.sh
 
 RUN chmod +x /home/docker/start.sh
 

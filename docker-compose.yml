@@ -1,6 +1,6 @@
 services:
   runner:
-    image: ghcr.io/jamesonrgrieve-instruction/runner:latest
+    image: ghcr.io/jamesonrgrieve-instruction/runner:main
     restart: always
     environment:
       - REPO=<owner>/<repo>
