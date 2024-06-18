@@ -5,7 +5,6 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  TOKEN: ${{ secrets.TOKEN }}
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -35,3 +34,6 @@ jobs:
           platforms: linux/amd64,linux/arm64/v8
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+        env:
+          REPO: ${{ github.repository }}
+          TOKEN: ${{ secrets.TOKEN }}
