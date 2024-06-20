@@ -11,7 +11,7 @@ ENV REPO=$REPO
 ENV TOKEN=$TOKEN
 
 RUN apt-get update && apt-get -y install sudo
-RUN apt install -y --no-install-recommends curl jq build-essential libssl-dev libffi-dev python3 python3-venv python3-dev python3-pip dotnet-sdk-8.0 aspnetcore-runtime-8.0
+RUN apt install -y --no-install-recommends curl jq build-essential libssl-dev libffi-dev python3 python3-venv python3-dev python3-pip dotnet-sdk-8.0 dotnet-runtime-8.0
 RUN curl -sSL https://get.docker.com/ | sudo sh 
 RUN useradd -m docker 
 RUN rm -rf /var/lib/apt/lists/*
