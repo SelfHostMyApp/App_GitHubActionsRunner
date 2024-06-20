@@ -10,9 +10,10 @@ ARG TOKEN
 ENV REPO=$REPO
 ENV TOKEN=$TOKEN
 
-
-
-RUN curl -sSL https://get.docker.com/ | su sh && apt update -y && apt upgrade -y && \ 
+RUN apt-get update && \
+    apt-get -y install sudo
+RUN useradd -m docker && echo "docker:docker" | chpasswd && adduser docker sudo
+RUN curl -sSL https://get.docker.com/ | sudo sh && apt update -y && apt upgrade -y && \ 
     useradd -m docker && \
     apt install -y --no-install-recommends curl jq build-essential libssl-dev libffi-dev python3 python3-venv python3-dev python3-pip && \
     rm -rf /var/lib/apt/lists/* && \
