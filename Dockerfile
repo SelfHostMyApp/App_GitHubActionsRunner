@@ -17,8 +17,7 @@ RUN useradd -m -g docker docker
 RUN curl -O -L https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz 
 RUN cd /home/docker && mkdir actions-runner && cd actions-runner 
 RUN tar xzf ./actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz 
-RUN ls -a
-RUN chown -R docker ~docker 
+RUN chown -R docker /home/docker
 RUN /home/docker/actions-runner/bin/installdependencies.sh
 
 
