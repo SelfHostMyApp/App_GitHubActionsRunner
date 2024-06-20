@@ -12,14 +12,15 @@ ENV TOKEN=$TOKEN
 
 RUN apt-get update && apt-get -y install --no-install-recommends sudo bash curl jq build-essential libssl-dev libffi-dev python3 python3-venv python3-dev python3-pip
 
+RUN curl -sSL https://get.docker.com/ | sudo sh
 RUN useradd -m -g docker docker 
-RUN cd /home/docker && mkdir actions-runner && cd actions-runner 
 RUN curl -O -L https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz 
+RUN cd /home/docker && mkdir actions-runner && cd actions-runner 
 RUN tar xzf ./actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz 
 
 RUN chown -R docker ~docker 
 RUN /home/docker/actions-runner/bin/installdependencies.sh
-RUN curl -sSL https://get.docker.com/ | sudo sh 
+
 
 
 COPY /scripts/ /home/docker/scripts/
