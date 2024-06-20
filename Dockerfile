@@ -14,7 +14,9 @@ RUN apt-get update && apt-get -y install --no-install-recommends sudo bash curl 
 WORKDIR /app
 RUN curl -sSL https://get.docker.com/ | sudo sh
 RUN curl -O -L https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz && tar xzf ./actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz 
+RUN ls -a
 RUN /app/actions-runner/bin/installdependencies.sh
+RUN mkdir /app/scripts
 COPY /scripts/ /app/scripts/
 RUN chmod +x /app/scripts/start.sh
 ENTRYPOINT ["/home/docker/scripts/start.sh"]
