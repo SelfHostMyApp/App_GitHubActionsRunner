@@ -10,10 +10,9 @@ ARG TOKEN
 ENV REPO=$REPO
 ENV TOKEN=$TOKEN
 
-RUN apt-get update && apt-get -y install sudo
-RUN apt install -y --no-install-recommends curl jq build-essential libssl-dev libffi-dev python3 python3-venv python3-dev python3-pip
+RUN apt-get update && apt-get -y install --no-install-recommends sudo curl jq build-essential libssl-dev libffi-dev python3 python3-venv python3-dev python3-pip
 RUN curl -sSL https://get.docker.com/ | sudo sh 
-RUN useradd -m docker 
+RUN useradd -g docker 
 RUN rm -rf /var/lib/apt/lists/*
 RUN cd /home/docker && mkdir actions-runner && cd actions-runner 
 RUN curl -O -L https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz 
