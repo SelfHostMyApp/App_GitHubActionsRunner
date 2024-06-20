@@ -10,22 +10,11 @@ ARG TOKEN
 ENV REPO=$REPO
 ENV TOKEN=$TOKEN
 
-RUN apt-get update && apt-get -y install --no-install-recommends sudo bash curl jq build-essential libssl-dev libffi-dev python3 python3-venv python3-dev python3-pip
-
+RUN apt-get update && apt-get -y install --no-install-recommends sudo bash curl jq build-essential libssl-dev libffi-dev python3 python3-venv python3-dev python3-pip && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
 RUN curl -sSL https://get.docker.com/ | sudo sh
-RUN useradd -m -g docker docker && mkdir /home/docker
-RUN curl -O -L https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz 
-RUN cd /home/docker && mkdir actions-runner && cd actions-runner 
-RUN tar xzf ./actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz 
-RUN chown -R docker /home/docker
-RUN /home/docker/actions-runner/bin/installdependencies.sh
-
-
-
-COPY /scripts/ /home/docker/scripts/
-
-RUN chmod +x /home/docker/scripts/start.sh
-RUN rm -rf /var/lib/apt/lists/*
-USER docker
-
+RUN curl -O -L https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz && tar xzf ./actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz 
+RUN /app/actions-runner/bin/installdependencies.sh
+COPY /scripts/ /app/scripts/
+RUN chmod +x /app/scripts/start.sh
 ENTRYPOINT ["/home/docker/scripts/start.sh"]
