@@ -3,19 +3,22 @@ ARG RUNNER_VERSION="2.317.0"
 ARG DEBIAN_FRONTEND=noninteractive
 ARG REPO
 ARG TOKEN
-ENV REPO=$REPO
-ENV TOKEN=$TOKEN
+ENV REPO=${REPO}
+ENV TOKEN=${TOKEN}
 
 RUN apt-get update && apt-get -y install --no-install-recommends \
     sudo bash curl jq build-essential libssl-dev libffi-dev \
     python3 python3-venv python3-dev python3-pip \
+    apt-transport-https ca-certificates gnupg lsb-release \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -sSL https://get.docker.com/ | sh
+# Install Docker CLI
+RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+RUN echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+RUN apt-get update && apt-get install -y docker-ce-cli
 
 # Create a non-root user
 RUN useradd -m runner
-
 WORKDIR /home/runner
 
 # Download and extract the runner as the non-root user
