@@ -34,6 +34,9 @@ COPY scripts/ /home/runner/scripts/
 RUN chmod +x /home/runner/scripts/start.sh \
     && chown -R runner:runner /home/runner
 
+RUN groupadd -f docker
+RUN usermod -aG docker runner
+
 # Switch to the non-root user
 USER runner
 
