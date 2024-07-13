@@ -13,13 +13,14 @@ RUN apt-get update && apt-get -y install --no-install-recommends \
 
 WORKDIR /app
 
-RUN curl -sSL https://get.docker.com/ | sudo sh
+RUN curl -sSL https://get.docker.com/ | sh
 
-RUN curl -O -L https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz \
+RUN mkdir actions-runner && cd actions-runner \
+    && curl -O -L https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz \
     && tar xzf ./actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz \
     && rm actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz
 
-RUN ./bin/installdependencies.sh
+RUN /app/actions-runner/bin/installdependencies.sh
 
 COPY scripts/ /app/scripts/
 RUN chmod +x /app/scripts/start.sh
