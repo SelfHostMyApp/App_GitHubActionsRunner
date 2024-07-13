@@ -9,7 +9,7 @@ ENV TOKEN=${TOKEN}
 RUN apt-get update && apt-get -y install --no-install-recommends \
     sudo bash curl jq build-essential libssl-dev libffi-dev \
     python3 python3-venv python3-dev python3-pip \
-    apt-transport-https ca-certificates gnupg lsb-release \
+    apt-transport-https ca-certificates gnupg lsb-release systemctl \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Docker CLI
@@ -36,6 +36,8 @@ RUN chmod +x /home/runner/scripts/start.sh \
 
 RUN groupadd -f docker
 RUN usermod -aG docker runner
+
+RUN systemctl start docker
 
 # Switch to the non-root user
 USER runner
