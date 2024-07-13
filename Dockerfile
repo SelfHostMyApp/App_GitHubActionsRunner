@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y docker-ce docker-ce-cli containerd.io d
 # Create a non-root user
 RUN useradd -m runner
 WORKDIR /home/runner
+RUN echo 'runner:yes' | sudo chpasswd
 
 # Download and extract the runner as the non-root user
 RUN curl -O -L https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz \
@@ -36,6 +37,7 @@ RUN chmod +x /home/runner/scripts/start.sh \
 
 RUN groupadd -f docker
 RUN usermod -aG docker runner
+RUN usermod -aG sudo runner
 
 RUN sudo systemctl enable docker.service 
 RUN sudo systemctl enable containerd.service 
