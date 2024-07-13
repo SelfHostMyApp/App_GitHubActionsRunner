@@ -1,24 +1,37 @@
-#!/bin/bash
+FROM ubuntu:20.04
+ARG RUNNER_VERSION="2.317.0"
+ARG DEBIAN_FRONTEND=noninteractive
+ARG REPO
+ARG TOKEN
+ENV REPO=$REPO
+ENV TOKEN=$TOKEN
 
-REPO=$REPO
-ACCESS_TOKEN=$TOKEN
+RUN apt-get update && apt-get -y install --no-install-recommends \
+    sudo bash curl jq build-essential libssl-dev libffi-dev \
+    python3 python3-venv python3-dev python3-pip &&
+    rm -rf /var/lib/apt/lists/*
 
-REG_TOKEN=$(curl -X POST -H "Authorization: token ${ACCESS_TOKEN}" -H "Accept: application/vnd.github+json" https://api.github.com/orgs/Web-Development-UAlberta/actions/runners/registration-token | jq .token --raw-output)
+RUN curl -sSL https://get.docker.com/ | sh
 
-echo "REG TOKEN"
-echo ${REG_TOKEN}
+# Create a non-root user
+RUN useradd -m runner
 
-cd /app/actions-runner
+WORKDIR /home/runner
 
-./config.sh --url https://github.com/Web-Development-UAlberta --token ${REG_TOKEN}
+# Download and extract the runner as the non-root user
+RUN curl -O -L https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz &&
+    tar xzf ./actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz &&
+    rm actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz
 
-cleanup() {
-    echo "Removing runner..."
-    ./config.sh remove --unattended --token ${REG_TOKEN}
-}
+# Install dependencies as root
+RUN ./bin/installdependencies.sh
 
-trap 'cleanup; exit 130' INT
-trap 'cleanup; exit 143' TERM
+# Copy scripts and set permissions
+COPY scripts/ /home/runner/scripts/
+RUN chmod +x /home/runner/scripts/start.sh &&
+    chown -R runner:runner /home/runner
 
-./run.sh &
-wait $!
+# Switch to the non-root user
+USER runner
+
+ENTRYPOINT ["/home/runner/scripts/start.sh"]
