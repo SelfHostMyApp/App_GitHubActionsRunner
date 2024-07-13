@@ -41,7 +41,7 @@ RUN usermod -aG sudo runner
 
 RUN sudo systemctl enable docker.service 
 RUN sudo systemctl enable containerd.service 
-RUN sudo dockerd
+
 # Switch to the non-root user
 USER runner
 
