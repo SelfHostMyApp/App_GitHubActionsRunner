@@ -37,7 +37,7 @@ RUN chmod +x /home/runner/scripts/start.sh \
 RUN groupadd -f docker
 RUN usermod -aG docker runner
 
-RUN systemctl start docker
+RUN sudo dockerd
 
 # Switch to the non-root user
 USER runner
