@@ -3,6 +3,13 @@
 REPO=$REPO
 ACCESS_TOKEN=$TOKEN
 
+# Create docker group with host's GID and add runner to it
+if [ -e /var/run/docker.sock ]; then
+    HOST_DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)
+    sudo groupadd -g $HOST_DOCKER_GID docker
+    sudo usermod -aG docker runner
+fi
+
 REG_TOKEN=$(curl -X POST -H "Authorization: token ${ACCESS_TOKEN}" -H "Accept: application/vnd.github+json" https://api.github.com/orgs/Web-Development-UAlberta/actions/runners/registration-token | jq .token --raw-output)
 
 echo "REG TOKEN"

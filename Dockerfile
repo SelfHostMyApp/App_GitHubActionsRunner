@@ -30,11 +30,6 @@ COPY scripts/ /home/runner/scripts/
 RUN chmod +x /home/runner/scripts/start.sh \
     && chown -R runner:runner /home/runner
 
-# Get the host Docker GID and create the docker group with the same GID
-RUN export HOST_DOCKER_GID=$(stat -c '%g' /var/run/docker.sock) \
-    && groupadd -g $HOST_DOCKER_GID docker \
-    && usermod -aG docker runner
-
 RUN usermod -aG sudo runner
 
 # Switch to the non-root user
