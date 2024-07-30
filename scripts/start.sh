@@ -9,7 +9,6 @@ echo "REG TOKEN"
 echo ${REG_TOKEN}
 
 cd /home/runner
-# sudo dockerd
 
 ./config.sh --url https://github.com/Web-Development-UAlberta --token ${REG_TOKEN}
 
