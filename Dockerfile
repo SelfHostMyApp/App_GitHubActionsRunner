@@ -23,6 +23,7 @@ RUN echo 'runner:yes' | sudo chpasswd && curl -O -L https://github.com/actions/r
     && rm actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz && ./bin/installdependencies.sh \
     && chmod +x /home/runner/scripts/start.sh \
     && chown -R runner:runner /home/runner && usermod -aG sudo runner && \
+    echo "runner ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers && \
     echo "export PATH=$PATH:/usr/bin" >> /etc/bash.bashrc
 
 # Switch to the non-root user

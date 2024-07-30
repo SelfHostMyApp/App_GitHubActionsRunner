@@ -9,7 +9,6 @@ if [ -e /var/run/docker.sock ]; then
     sudo groupadd -g $HOST_DOCKER_GID docker
     sudo usermod -aG docker runner
     # Ensure the current shell has the updated group membership
-    exec sudo su -l $USER
 fi
 
 REG_TOKEN=$(curl -X POST -H "Authorization: token ${ACCESS_TOKEN}" -H "Accept: application/vnd.github+json" https://api.github.com/orgs/Web-Development-UAlberta/actions/runners/registration-token | jq .token --raw-output)
