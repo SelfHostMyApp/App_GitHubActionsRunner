@@ -10,7 +10,11 @@ RUN apt-get update && apt-get -y install --no-install-recommends \
     sudo bash curl jq build-essential libssl-dev libffi-dev \
     python3 python3-venv python3-dev python3-pip \
     apt-transport-https ca-certificates gnupg lsb-release \
-    && rm -rf /var/lib/apt/lists/* && useradd -m runner
+    && rm -rf /var/lib/apt/lists/* && \
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null && \
+    apt-get update && apt-get install -y docker-ce-cli && \
+    useradd -m runner
 WORKDIR /home/runner
 COPY scripts/ /home/runner/scripts/
 # Download and extract the runner as the non-root user
