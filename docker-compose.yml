@@ -5,6 +5,8 @@ services:
     environment:
       - REPO=<owner>/<repo>
       - TOKEN=${TOKEN}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     deploy:
       mode: replicated
       replicas: 1
