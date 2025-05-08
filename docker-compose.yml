@@ -1,12 +1,13 @@
 services:
   runner:
+    container_name: gh-runner
     # image: ghcr.io/jamesonrgrieve-instruction/runner:main
     build:
       context: .
       dockerfile: Dockerfile
     restart: always
     env_file:
-      - ../.env
+      - ../../.env
     environment:
       - REPO=<owner>/<repo>
       - TOKEN=${GH_ACTIONS_TOKEN}
