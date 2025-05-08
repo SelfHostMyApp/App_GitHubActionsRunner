@@ -1,11 +1,13 @@
 services:
   runner:
+    container_name: gh-runner
+    # image: ghcr.io/jamesonrgrieve-instruction/runner:main
     build:
       context: .
       dockerfile: Dockerfile
     restart: always
     env_file:
-      - ../.env
+      - ../../.env
     environment:
       # Set either ORG_NAME or USER_NAME, not both
       # - ORG_NAME=your-organization
