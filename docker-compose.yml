@@ -1,6 +1,9 @@
 services:
   runner:
-    image: ghcr.io/jamesonrgrieve-instruction/runner:main
+    # image: ghcr.io/jamesonrgrieve-instruction/runner:main
+    build:
+      context: .
+      dockerfile: Dockerfile
     restart: always
     environment:
       - REPO=<owner>/<repo>
@@ -17,3 +20,5 @@ services:
         reservations:
           cpus: "0.25"
           memory: 256M
+    networks:
+      - bridge
