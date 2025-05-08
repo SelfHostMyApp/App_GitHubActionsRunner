@@ -1,6 +1,5 @@
 services:
   runner:
-    # image: ghcr.io/jamesonrgrieve-instruction/runner:main
     build:
       context: .
       dockerfile: Dockerfile
@@ -8,8 +7,14 @@ services:
     env_file:
       - ../.env
     environment:
-      - REPO=<owner>/<repo>
+      # Set either ORG_NAME or USER_NAME, not both
+      # - ORG_NAME=your-organization
+      # - USER_NAME=your-username
+      # REPO is required when using USER_NAME
+      - REPO=${REPO:-}
       - TOKEN=${GH_ACTIONS_TOKEN}
+      - ORG_NAME=${GH_ORG_NAME:-}
+      - USER_NAME=${GH_USER_NAME:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     deploy:

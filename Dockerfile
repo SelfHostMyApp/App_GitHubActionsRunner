@@ -1,10 +1,14 @@
 FROM ubuntu:20.04
-ARG RUNNER_VERSION="2.318.0"
+ARG RUNNER_VERSION="2.323.0"
 ARG DEBIAN_FRONTEND=noninteractive
 ARG REPO
 ARG TOKEN
+ARG ORG_NAME
+ARG USER_NAME
 ENV REPO=${REPO}
 ENV TOKEN=${TOKEN}
+ENV ORG_NAME=${ORG_NAME}
+ENV USER_NAME=${USER_NAME}
 
 RUN apt-get update && apt-get -y install --no-install-recommends \
     sudo bash curl jq build-essential libssl-dev libffi-dev \
@@ -17,7 +21,6 @@ RUN apt-get update && apt-get -y install --no-install-recommends \
     useradd -m runner
 WORKDIR /home/runner
 COPY scripts/ /home/runner/scripts/
-# Download and extract the runner as the non-root user
 RUN echo 'runner:yes' | sudo chpasswd && curl -O -L https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz \
     && tar xzf ./actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz \
     && rm actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz && ./bin/installdependencies.sh \
