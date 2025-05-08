@@ -5,9 +5,11 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: always
+    env_file:
+      - ../.env
     environment:
       - REPO=<owner>/<repo>
-      - TOKEN=${TOKEN}
+      - TOKEN=${GH_ACTIONS_TOKEN}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     deploy:
