@@ -8,16 +8,13 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: always
-    
-    #environment:
-      # Set either ORG_NAME or USER_NAME, not both
-      # - ORG_NAME=your-organization
-      # - USER_NAME=your-username
-      # REPO is required when using USER_NAME
-      #- REPO=${GH_REPO:-}
-      #- GH_ACTIONS_TOKEN=${GH_ACTIONS_TOKEN}
-      #- ORG_NAME=${GH_ORG_NAME:-}
-      #- USER_NAME=${GH_USER_NAME:-}
+
+    environment:
+      # REPO is required when using GH_USER_NAME
+      - GH_REPO=${GH_REPO:-}
+      - GH_ACTIONS_TOKEN=${GH_ACTIONS_TOKEN}
+      - GH_ORG_NAME=${GH_ORG_NAME:-}
+      - GH_USER_NAME=${GH_USER_NAME:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     deploy:
