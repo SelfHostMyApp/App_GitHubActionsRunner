@@ -8,13 +8,6 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: always
-
-    environment:
-      # REPO is required when using GH_USER_NAME
-      - GH_REPO=${GH_REPO:-}
-      - GH_ACTIONS_TOKEN=${GH_ACTIONS_TOKEN}
-      - GH_ORG_NAME=${GH_ORG_NAME:-}
-      - GH_USER_NAME=${GH_USER_NAME:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     deploy:

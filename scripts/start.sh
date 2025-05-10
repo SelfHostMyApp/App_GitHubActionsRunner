@@ -1,55 +1,188 @@
 #!/bin/bash
 
-# Error checking for environment variables
-if [[ -n "$GH_ORG_NAME" && -n "$GH_USER_NAME" ]]; then
-    echo "ERROR: Both GH_ORG_NAME and GH_USER_NAME are set. Please set only one."
+echo "========== ENVIRONMENT VARIABLE DEBUG =========="
+echo "GH_USER_NAME: [${GH_USER_NAME}]"
+echo "GH_REPOSITORIES: [${GH_REPOSITORIES}]"
+echo "GH_ACTIONS_PAT: [${GH_ACTIONS_PAT:-NOT SET}]"
+echo "GH_RUNNER_REGISTRATION_TOKEN: [${GH_RUNNER_REGISTRATION_TOKEN:-NOT SET}]"
+echo "GH_ORGANIZATION_NAME: [${GH_ORGANIZATION_NAME:-NOT SET}]"
+echo "=============================================="
+
+# Determine which mode to use
+MODE=""
+
+if [ -n "$GH_USER_NAME" ] && [ -n "$GH_ACTIONS_PAT" ] && [ -n "$GH_REPOSITORIES" ]; then
+    echo "DETECTED: User-wide runner configuration with repositories: ${GH_REPOSITORIES}"
+    MODE="multi-repo"
+elif [ -n "$GH_RUNNER_REGISTRATION_TOKEN" ] && [ -n "$GH_USER_NAME" ] && [ -n "$GH_REPOSITORIES" ]; then
+    echo "DETECTED: Single repository runner configuration"
+    MODE="single-repo"
+elif [ -n "$GH_ORGANIZATION_NAME" ] && [ -n "$GH_ACTIONS_PAT" ]; then
+    echo "DETECTED: Organization-wide runner configuration"
+    MODE="org-wide"
+else
+    echo "ERROR: Invalid environment variable configuration."
+    echo "Please use one of the following configurations:"
+    echo "1. Single repository runner: GH_RUNNER_REGISTRATION_TOKEN, GH_USER_NAME, GH_REPOSITORIES"
+    echo "2. User-wide runner: GH_USER_NAME, GH_ACTIONS_PAT, GH_REPOSITORIES (comma-separated)"
+    echo "3. Organization-wide runner: GH_ORGANIZATION_NAME, GH_ACTIONS_PAT"
     exit 1
 fi
 
-if [[ -z "$GH_ORG_NAME" && -z "$GH_USER_NAME" ]]; then
-    echo "ERROR: Neither GH_ORG_NAME nor GH_USER_NAME is set. Please set one."
-    exit 1
-fi
+echo "Selected mode: ${MODE}"
 
-# Create docker group with host's GID and add runner to it
+# Configure Docker group if needed
 if [ -e /var/run/docker.sock ]; then
     HOST_DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)
-    sudo groupadd -g $HOST_DOCKER_GID docker
-    sudo usermod -aG docker runner
-    # Ensure the current shell has the updated group membership
-fi
+    echo "Creating docker group with GID: ${HOST_DOCKER_GID}"
+    groupadd -g $HOST_DOCKER_GID docker || echo "Group already exists or cannot be created"
 
-# Set up the correct URL and token endpoint based on whether we're using org or user
-if [ -n "$GH_ORG_NAME" ]; then
-    # Organization runner setup
-    GITHUB_URL="https://github.com/${GH_ORG_NAME}"
-    TOKEN_URL="https://api.github.com/orgs/${GH_ORG_NAME}/actions/runners/registration-token"
-    REG_TOKEN=$(curl -X POST -H "Authorization: token ${GH_ACTIONS_TOKEN}" -H "Accept: application/vnd.github+json" ${TOKEN_URL} | jq .token --raw-output)
-else
-    # User repository runner setup
-    if [ -z "$GH_REPO" ]; then
-        echo "ERROR: GH_REPO must be set when using GH_USER_NAME"
-        exit 1
+    if id -u runner >/dev/null 2>&1; then
+        usermod -aG docker runner
+    else
+        echo "User 'runner' does not exist, skipping group assignment"
     fi
-    GITHUB_URL="https://github.com/${GH_USER_NAME}/${GH_REPO}"
-    TOKEN_URL="https://api.github.com/repos/${GH_USER_NAME}/${GH_REPO}/actions/runners/registration-token"
-    REG_TOKEN=$GH_ACTIONS_TOKEN
 fi
-
-echo "REG TOKEN"
-echo ${REG_TOKEN}
 
 cd /home/docker/actions-runner
 
-./config.sh --url ${GITHUB_URL} --token ${REG_TOKEN}
+# Show GitHub Runner version
+echo "GitHub Runner version: $(./config.sh --version || echo "Could not determine runner version")"
 
-cleanup() {
-    echo "Removing runner..."
-    ./config.sh remove --unattended --token ${REG_TOKEN}
+# Simplified token extraction
+extract_token_from_json() {
+    # Direct extraction based on known format: {"token":"ABCDEF","expires_at":"..."}
+    # This was working in previous versions
+    echo "$1" | tr -d '\n' | tr -d ' ' | sed 's/.*"token":"//g' | sed 's/".*//g'
 }
+
+if [ "$MODE" = "single-repo" ]; then
+    # Already have the token, use it directly
+    GITHUB_URL="https://github.com/${GH_USER_NAME}/${GH_REPOSITORIES}"
+
+    echo "Configuring single repository runner for ${GITHUB_URL}"
+    ./config.sh --url ${GITHUB_URL} --token ${GH_RUNNER_REGISTRATION_TOKEN} --unattended --name "single-repo-runner"
+
+    cleanup() {
+        echo "Removing runner..."
+        ./config.sh remove --unattended --token ${GH_RUNNER_REGISTRATION_TOKEN}
+    }
+
+elif [ "$MODE" = "multi-repo" ]; then
+    # Convert comma-separated list to array
+    IFS=',' read -ra REPOS <<<"$GH_REPOSITORIES"
+    echo "Configuring runner for ${#REPOS[@]} repositories:"
+
+    for repo in "${REPOS[@]}"; do
+        echo "- $repo"
+    done
+
+    # Track if we successfully configured at least one repository
+    SUCCESS=false
+
+    for repo in "${REPOS[@]}"; do
+        GITHUB_URL="https://github.com/${GH_USER_NAME}/${repo}"
+        TOKEN_URL="https://api.github.com/repos/${GH_USER_NAME}/${repo}/actions/runners/registration-token"
+
+        echo "Fetching registration token for ${repo}..."
+        echo "Using URL: ${TOKEN_URL}"
+
+        # Exactly match the docs - use the correct API version and bearer auth
+        JSON_RESPONSE=$(curl -s -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_ACTIONS_PAT}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            ${TOKEN_URL})
+
+        echo "API Response: ${JSON_RESPONSE}"
+
+        # Extract the token
+        REG_TOKEN=$(extract_token_from_json "$JSON_RESPONSE")
+
+        if [ -z "$REG_TOKEN" ]; then
+            echo "ERROR: Failed to get registration token for ${repo}"
+            continue
+        fi
+
+        echo "Successfully obtained token: ${REG_TOKEN}"
+        echo "Configuring runner for ${repo}..."
+
+        # Add repo name as a label
+        REPO_LABEL="${repo}-runner"
+        LABEL_ARG="--labels ${REPO_LABEL}"
+
+        # Add custom labels if provided
+        if [ -n "$RUNNER_LABELS" ]; then
+            LABEL_ARG="${LABEL_ARG},${RUNNER_LABELS}"
+        fi
+
+        # Configure the runner
+        echo "Running config.sh with: --url ${GITHUB_URL} --token [REDACTED] --unattended --name multi-repo-runner --replace ${LABEL_ARG}"
+        ./config.sh --url ${GITHUB_URL} --token ${REG_TOKEN} --unattended --name "multi-repo-runner" --replace ${LABEL_ARG}
+
+        if [ $? -eq 0 ]; then
+            echo "Runner successfully configured for ${repo}"
+            SUCCESS=true
+            break # Successfully configured one repo, no need to try others
+        else
+            echo "Failed to configure runner for ${repo}"
+        fi
+    done
+
+    if [ "$SUCCESS" = false ]; then
+        echo "ERROR: Failed to configure runner for any repository"
+        exit 1
+    fi
+
+    cleanup() {
+        echo "Cleanup function called for multi-repo runner"
+    }
+
+elif [ "$MODE" = "org-wide" ]; then
+    # Organization runner setup
+    GITHUB_URL="https://github.com/${GH_ORGANIZATION_NAME}"
+    TOKEN_URL="https://api.github.com/orgs/${GH_ORGANIZATION_NAME}/actions/runners/registration-token"
+
+    echo "Fetching registration token for organization ${GH_ORGANIZATION_NAME}..."
+    echo "Using URL: ${TOKEN_URL}"
+
+    # Exactly match the docs - use the correct API version and bearer auth
+    JSON_RESPONSE=$(curl -s -X POST \
+        -H "Accept: application/vnd.github+json" \
+        -H "Authorization: Bearer ${GH_ACTIONS_PAT}" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        ${TOKEN_URL})
+
+    echo "API Response: ${JSON_RESPONSE}"
+
+    # Extract the token
+    REG_TOKEN=$(extract_token_from_json "$JSON_RESPONSE")
+
+    if [ -z "$REG_TOKEN" ]; then
+        echo "ERROR: Failed to get registration token for organization"
+        exit 1
+    fi
+
+    echo "Successfully obtained token: ${REG_TOKEN}"
+    echo "Configuring organization runner for ${GITHUB_URL}"
+
+    # Configure the runner
+    ./config.sh --url ${GITHUB_URL} --token ${REG_TOKEN} --unattended --name "org-runner"
+
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Failed to configure organization runner"
+        exit 1
+    fi
+
+    cleanup() {
+        echo "Removing runner..."
+        ./config.sh remove --unattended --token ${REG_TOKEN}
+    }
+fi
 
 trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 
+echo "Starting runner..."
 ./run.sh &
 wait $!
