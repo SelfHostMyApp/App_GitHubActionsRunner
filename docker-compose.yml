@@ -2,7 +2,7 @@ services:
   runner:
     env_file:
       - ../../.env
-    container_name: gh-runner
+    container_name: github-actions
     # image: ghcr.io/jamesonrgrieve-instruction/runner:main
     build:
       context: .
@@ -20,4 +20,6 @@ services:
         reservations:
           cpus: "0.25"
           memory: 256M
-    network_mode: bridge
+    networks:
+      core:
+        ipv4_address: 172.20.0.123
