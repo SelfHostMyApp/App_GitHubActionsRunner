@@ -1,31 +1,31 @@
 #!/bin/bash
 
 echo "========== ENVIRONMENT VARIABLE DEBUG =========="
-echo "GH_USER_NAME: [${GH_USER_NAME}]"
-echo "GH_REPOSITORIES: [${GH_REPOSITORIES}]"
-echo "GH_ACTIONS_PAT: [${GH_ACTIONS_PAT:-NOT SET}]"
-echo "GH_RUNNER_REGISTRATION_TOKEN: [${GH_RUNNER_REGISTRATION_TOKEN:-NOT SET}]"
-echo "GH_ORGANIZATION_NAME: [${GH_ORGANIZATION_NAME:-NOT SET}]"
+echo "GITHUB_ACTIONS_USER_NAME: [${GITHUB_ACTIONS_USER_NAME}]"
+echo "GITHUB_ACTIONS_REPOSITORIES: [${GITHUB_ACTIONS_REPOSITORIES}]"
+echo "GITHUB_ACTIONS_ACTIONS_PAT: [${GITHUB_ACTIONS_ACTIONS_PAT:-NOT SET}]"
+echo "GITHUB_ACTIONS_RUNNER_REGISTRATION_TOKEN: [${GITHUB_ACTIONS_RUNNER_REGISTRATION_TOKEN:-NOT SET}]"
+echo "GITHUB_ACTIONS_ORGANIZATION_NAME: [${GITHUB_ACTIONS_ORGANIZATION_NAME:-NOT SET}]"
 echo "=============================================="
 
 # Determine which mode to use
 MODE=""
 
-if [ -n "$GH_USER_NAME" ] && [ -n "$GH_ACTIONS_PAT" ] && [ -n "$GH_REPOSITORIES" ]; then
-    echo "DETECTED: User-wide runner configuration with repositories: ${GH_REPOSITORIES}"
+if [ -n "$GITHUB_ACTIONS_USER_NAME" ] && [ -n "$GITHUB_ACTIONS_ACTIONS_PAT" ] && [ -n "$GITHUB_ACTIONS_REPOSITORIES" ]; then
+    echo "DETECTED: User-wide runner configuration with repositories: ${GITHUB_ACTIONS_REPOSITORIES}"
     MODE="multi-repo"
-elif [ -n "$GH_RUNNER_REGISTRATION_TOKEN" ] && [ -n "$GH_USER_NAME" ] && [ -n "$GH_REPOSITORIES" ]; then
+elif [ -n "$GITHUB_ACTIONS_RUNNER_REGISTRATION_TOKEN" ] && [ -n "$GITHUB_ACTIONS_USER_NAME" ] && [ -n "$GITHUB_ACTIONS_REPOSITORIES" ]; then
     echo "DETECTED: Single repository runner configuration"
     MODE="single-repo"
-elif [ -n "$GH_ORGANIZATION_NAME" ] && [ -n "$GH_ACTIONS_PAT" ]; then
+elif [ -n "$GITHUB_ACTIONS_ORGANIZATION_NAME" ] && [ -n "$GITHUB_ACTIONS_ACTIONS_PAT" ]; then
     echo "DETECTED: Organization-wide runner configuration"
     MODE="org-wide"
 else
     echo "ERROR: Invalid environment variable configuration."
     echo "Please use one of the following configurations:"
-    echo "1. Single repository runner: GH_RUNNER_REGISTRATION_TOKEN, GH_USER_NAME, GH_REPOSITORIES"
-    echo "2. User-wide runner: GH_USER_NAME, GH_ACTIONS_PAT, GH_REPOSITORIES (comma-separated)"
-    echo "3. Organization-wide runner: GH_ORGANIZATION_NAME, GH_ACTIONS_PAT"
+    echo "1. Single repository runner: GITHUB_ACTIONS_RUNNER_REGISTRATION_TOKEN, GITHUB_ACTIONS_USER_NAME, GITHUB_ACTIONS_REPOSITORIES"
+    echo "2. User-wide runner: GITHUB_ACTIONS_USER_NAME, GITHUB_ACTIONS_ACTIONS_PAT, GITHUB_ACTIONS_REPOSITORIES (comma-separated)"
+    echo "3. Organization-wide runner: GITHUB_ACTIONS_ORGANIZATION_NAME, GITHUB_ACTIONS_ACTIONS_PAT"
     exit 1
 fi
 
@@ -58,19 +58,19 @@ extract_token_from_json() {
 
 if [ "$MODE" = "single-repo" ]; then
     # Already have the token, use it directly
-    GITHUB_URL="https://github.com/${GH_USER_NAME}/${GH_REPOSITORIES}"
+    GITHUB_URL="https://github.com/${GITHUB_ACTIONS_USER_NAME}/${GITHUB_ACTIONS_REPOSITORIES}"
 
     echo "Configuring single repository runner for ${GITHUB_URL}"
-    ./config.sh --url ${GITHUB_URL} --token ${GH_RUNNER_REGISTRATION_TOKEN} --unattended --name "single-repo-runner"
+    ./config.sh --url ${GITHUB_URL} --token ${GITHUB_ACTIONS_RUNNER_REGISTRATION_TOKEN} --unattended --name "single-repo-runner"
 
     cleanup() {
         echo "Removing runner..."
-        ./config.sh remove --unattended --token ${GH_RUNNER_REGISTRATION_TOKEN}
+        ./config.sh remove --unattended --token ${GITHUB_ACTIONS_RUNNER_REGISTRATION_TOKEN}
     }
 
 elif [ "$MODE" = "multi-repo" ]; then
     # Convert comma-separated list to array
-    IFS=',' read -ra REPOS <<<"$GH_REPOSITORIES"
+    IFS=',' read -ra REPOS <<<"$GITHUB_ACTIONS_REPOSITORIES"
     echo "Configuring runner for ${#REPOS[@]} repositories:"
 
     for repo in "${REPOS[@]}"; do
@@ -81,8 +81,8 @@ elif [ "$MODE" = "multi-repo" ]; then
     SUCCESS=false
 
     for repo in "${REPOS[@]}"; do
-        GITHUB_URL="https://github.com/${GH_USER_NAME}/${repo}"
-        TOKEN_URL="https://api.github.com/repos/${GH_USER_NAME}/${repo}/actions/runners/registration-token"
+        GITHUB_URL="https://github.com/${GITHUB_ACTIONS_USER_NAME}/${repo}"
+        TOKEN_URL="https://api.github.com/repos/${GITHUB_ACTIONS_USER_NAME}/${repo}/actions/runners/registration-token"
 
         echo "Fetching registration token for ${repo}..."
         echo "Using URL: ${TOKEN_URL}"
@@ -90,7 +90,7 @@ elif [ "$MODE" = "multi-repo" ]; then
         # Exactly match the docs - use the correct API version and bearer auth
         JSON_RESPONSE=$(curl -s -X POST \
             -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${GH_ACTIONS_PAT}" \
+            -H "Authorization: Bearer ${GITHUB_ACTIONS_ACTIONS_PAT}" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             ${TOKEN_URL})
 
@@ -140,16 +140,16 @@ elif [ "$MODE" = "multi-repo" ]; then
 
 elif [ "$MODE" = "org-wide" ]; then
     # Organization runner setup
-    GITHUB_URL="https://github.com/${GH_ORGANIZATION_NAME}"
-    TOKEN_URL="https://api.github.com/orgs/${GH_ORGANIZATION_NAME}/actions/runners/registration-token"
+    GITHUB_URL="https://github.com/${GITHUB_ACTIONS_ORGANIZATION_NAME}"
+    TOKEN_URL="https://api.github.com/orgs/${GITHUB_ACTIONS_ORGANIZATION_NAME}/actions/runners/registration-token"
 
-    echo "Fetching registration token for organization ${GH_ORGANIZATION_NAME}..."
+    echo "Fetching registration token for organization ${GITHUB_ACTIONS_ORGANIZATION_NAME}..."
     echo "Using URL: ${TOKEN_URL}"
 
     # Exactly match the docs - use the correct API version and bearer auth
     JSON_RESPONSE=$(curl -s -X POST \
         -H "Accept: application/vnd.github+json" \
-        -H "Authorization: Bearer ${GH_ACTIONS_PAT}" \
+        -H "Authorization: Bearer ${GITHUB_ACTIONS_ACTIONS_PAT}" \
         -H "X-GitHub-Api-Version: 2022-11-28" \
         ${TOKEN_URL})
 
