@@ -1,7 +1,7 @@
 services:
   runner:
     env_file:
-      - ../../.env
+      - .env
     container_name: github-actions
     # image: ghcr.io/jamesonrgrieve-instruction/runner:main
     build:
