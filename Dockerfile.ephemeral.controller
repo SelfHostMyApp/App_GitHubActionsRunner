@@ -1,0 +1,14 @@
+FROM ubuntu:20.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Install required packages
+RUN apt update -y && apt upgrade -y && \
+    apt install -y curl docker.io jq openssl
+
+# Copy controller script
+COPY runner-controller.sh /runner-controller.sh
+RUN chmod +x /runner-controller.sh
+
+# Run the controller
+ENTRYPOINT ["/runner-controller.sh"]

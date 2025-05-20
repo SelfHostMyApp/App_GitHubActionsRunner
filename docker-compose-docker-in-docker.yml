@@ -8,18 +8,19 @@ services:
       context: ./services/gh-actions
       dockerfile: Dockerfile
     restart: always
+    privileged: true # Required for Docker-in-Docker
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/docker # Docker-in-Docker volume
     deploy:
       mode: replicated
       replicas: 1
       resources:
         limits:
+          cpus: "1"
+          memory: 1G
+        reservations:
           cpus: "0.5"
           memory: 512M
-        reservations:
-          cpus: "0.25"
-          memory: 256M
     networks:
       core:
         ipv4_address: 172.20.0.123

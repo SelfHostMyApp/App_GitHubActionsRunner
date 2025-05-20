@@ -1,0 +1,68 @@
+FROM docker:dind as dind
+
+FROM ubuntu:20.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Install required packages
+RUN apt update -y && apt upgrade -y && \
+    apt install -y curl git apt-transport-https iptables ca-certificates software-properties-common
+
+# Setup Docker CLI
+COPY --from=dind /usr/local/bin/docker /usr/local/bin/
+COPY --from=dind /usr/local/bin/docker-init /usr/local/bin/
+COPY --from=dind /usr/local/bin/docker-proxy /usr/local/bin/
+COPY --from=dind /usr/local/bin/dockerd /usr/local/bin/
+COPY --from=dind /usr/local/bin/containerd* /usr/local/bin/
+COPY --from=dind /usr/local/bin/ctr /usr/local/bin/
+COPY --from=dind /usr/local/bin/runc /usr/local/bin/
+
+# Create a docker user for running the actions
+RUN useradd -m docker && \
+    mkdir -p /home/docker/.docker
+
+# Create download and start script directories
+RUN mkdir -p /home/docker/scripts
+COPY --chown=docker:docker scripts/download.sh /home/docker/scripts/
+RUN chmod +x /home/docker/scripts/download.sh
+
+# Run the download script as docker user
+WORKDIR /home/docker
+RUN su - docker -c "/home/docker/scripts/download.sh"
+
+# Install runner dependencies
+RUN /home/docker/actions-runner/bin/installdependencies.sh
+
+# Add start script with correct permissions
+COPY --chown=docker:docker scripts/start.sh /home/docker/scripts/
+RUN chmod +x /home/docker/scripts/start.sh
+
+# Ensure the docker user owns ALL runner files
+RUN chown -R docker:docker /home/docker
+
+# Create a wrapper script to start Docker-in-Docker and the runner
+RUN echo '#!/bin/bash\n\
+    # Start the Docker daemon in the background\n\
+    dockerd --host=unix:///var/run/docker.sock --host=tcp://0.0.0.0:2375 &\n\
+    # Wait for Docker to start\n\
+    echo "Waiting for Docker to start..."\n\
+    TIMEOUT=30\n\
+    COUNTER=0\n\
+    while ! docker info > /dev/null 2>&1; do\n\
+    if [ $COUNTER -gt $TIMEOUT ]; then\n\
+    echo "ERROR: Docker failed to start within $TIMEOUT seconds."\n\
+    exit 1\n\
+    fi\n\
+    sleep 1\n\
+    COUNTER=$((COUNTER+1))\n\
+    echo "Waiting... $COUNTER/$TIMEOUT"\n\
+    done\n\
+    echo "Docker started successfully!"\n\
+    \n\
+    # Switch to docker user and run the start script\n\
+    su - docker -c "/home/docker/scripts/start.sh"\n\
+    ' > /entrypoint.sh && \
+    chmod +x /entrypoint.sh
+
+# Docker daemon runs as root, and we need to start it from our entrypoint
+ENTRYPOINT ["/entrypoint.sh"]

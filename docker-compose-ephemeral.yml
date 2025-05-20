@@ -1,0 +1,23 @@
+services:
+  runner-controller:
+    container_name: github-runner-controller
+    build:
+      context: ./controller
+      dockerfile: Dockerfile
+    restart: always
+    environment:
+      - GITHUB_OWNER=${GITHUB_OWNER}
+      - REPO_NAME=${REPO_NAME}
+      - GITHUB_PAT=${GITHUB_PAT}
+      - RUNNER_LABEL=ephemeral
+      - MAX_RUNNERS=5
+      - POLL_INTERVAL=30
+      - DOCKER_NETWORK=github-runner-network
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - runner-network
+
+networks:
+  runner-network:
+    name: github-runner-network
