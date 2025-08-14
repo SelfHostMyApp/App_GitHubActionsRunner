@@ -1,0 +1,14 @@
+{
+    "JamesonRGrieve/ServerFramework": 12,
+    "JamesonRGrieve/AGInYourPC": 2,
+    "JamesonRGrieve/AGInfrastructure": 2,
+    "JamesonRGrieve/nursegpt": 2,
+    "JamesonRGrieve/ClientFramework": 2,
+    "JamesonRGrieve/AGInterface": 2,
+    "JamesonRGrieve/nursegpt_web": 2,
+    "JamesonRGrieve/AGInteractive": 1,
+    "JamesonRGrieve/AGIteration": 1,
+    "JamesonRGrieve/auth": 1,
+    "JamesonRGrieve/appwrapper": 1,
+    "JamesonRGrieve/dynamic-form": 1
+}
