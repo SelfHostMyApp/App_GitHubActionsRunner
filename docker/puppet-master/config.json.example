@@ -1,0 +1,28 @@
+{
+    "defaults": {
+        "cpus": 2,
+        "ram": "2g"
+    },
+    "repos": {
+        "JamesonRGrieve/ServerFramework": {
+            "max_count": 4,
+            "cpus": 4,
+            "ram": "4g"
+        },
+        "JamesonRGrieve/ClientFramework": {
+            "max_count": 1
+        },
+        "JamesonRGrieve/workflow-tests": {
+            "max_count": 1,
+            "cpus": 1,
+            "ram": "1g"
+        }
+    },
+    "orgs": {
+        "ExampleOrg": {
+            "max_count": 5,
+            "cpus": 2,
+            "ram": "2g"
+        }
+    }
+}

@@ -2,49 +2,102 @@
 # puppet-master.sh - Orchestrates ephemeral GitHub Actions runners
 #
 # Architecture:
-# - Single container with Docker socket access
-# - Reads count.json for per-repo runner ceilings
+# - Single container with Docker/Podman socket access
+# - Reads config.json for per-repo/org runner settings
 # - Spawns ephemeral runners that handle ONE job then die
 # - No cache pollution - each job gets a fresh container
+#
+# Supports:
+# - Repository-level runners (for personal repos)
+# - Organization-level runners (shared across org repos)
+# - Per-entry resource limits (cpus, ram)
+# - Docker and Podman runtimes
 
 set -e
 
 # Configuration
-CONFIG_FILE="${CONFIG_FILE:-/config/count.json}"
+CONFIG_FILE="${CONFIG_FILE:-/config/config.json}"
 GITHUB_PAT="${GITHUB_PAT:?GITHUB_PAT is required}"
 POLL_INTERVAL="${POLL_INTERVAL:-30}"
 RUNNER_IMAGE="${RUNNER_IMAGE:-ghcr.io/selfhostmyapp/ephemeral-runner:latest}"
-DOCKER_NETWORK="${DOCKER_NETWORK:-github-runners}"
-CONTAINER_CPU="${CONTAINER_CPU:-2}"
-CONTAINER_MEMORY="${CONTAINER_MEMORY:-2g}"
+CONTAINER_NETWORK="${CONTAINER_NETWORK:-github-runners}"
 
 # Prefix for all spawned runner containers
 RUNNER_PREFIX="ephemeral-runner"
 
+# Detect container runtime (Docker or Podman)
+detect_runtime() {
+    if command -v docker &> /dev/null && docker info &> /dev/null 2>&1; then
+        echo "docker"
+    elif command -v podman &> /dev/null && podman info &> /dev/null 2>&1; then
+        echo "podman"
+    else
+        echo ""
+    fi
+}
+
+RUNTIME=$(detect_runtime)
+if [ -z "$RUNTIME" ]; then
+    echo "ERROR: Neither Docker nor Podman is available"
+    exit 1
+fi
+
+# Detect socket path
+detect_socket() {
+    if [ -e "/var/run/docker.sock" ]; then
+        echo "/var/run/docker.sock"
+    elif [ -e "/var/run/podman/podman.sock" ]; then
+        echo "/var/run/podman/podman.sock"
+    elif [ -e "/run/podman/podman.sock" ]; then
+        echo "/run/podman/podman.sock"
+    elif [ -e "$XDG_RUNTIME_DIR/podman/podman.sock" ]; then
+        echo "$XDG_RUNTIME_DIR/podman/podman.sock"
+    else
+        echo ""
+    fi
+}
+
+CONTAINER_SOCKET=$(detect_socket)
+
 echo "==========================================="
 echo "  GitHub Actions Puppet Master Controller"
 echo "==========================================="
+echo "Runtime: ${RUNTIME}"
+echo "Socket: ${CONTAINER_SOCKET:-not mounted (using default)}"
 echo "Config file: ${CONFIG_FILE}"
 echo "Runner image: ${RUNNER_IMAGE}"
 echo "Poll interval: ${POLL_INTERVAL}s"
-echo "Container limits: ${CONTAINER_CPU} CPU, ${CONTAINER_MEMORY} memory"
 echo "==========================================="
 
 # Validate config file exists
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "ERROR: Config file not found: $CONFIG_FILE"
-    echo "Create a count.json with format: {\"owner/repo\": max_runners, ...}"
+    echo "Create a config.json - see config.json.example"
     exit 1
 fi
 
-# Create Docker network if it doesn't exist
-docker network inspect "$DOCKER_NETWORK" >/dev/null 2>&1 || {
-    echo "Creating Docker network: $DOCKER_NETWORK"
-    docker network create "$DOCKER_NETWORK"
+# Create container network if it doesn't exist
+$RUNTIME network inspect "$CONTAINER_NETWORK" >/dev/null 2>&1 || {
+    echo "Creating container network: $CONTAINER_NETWORK"
+    $RUNTIME network create "$CONTAINER_NETWORK"
 }
 
+# Read default settings from config
+get_default() {
+    local key="$1"
+    local fallback="$2"
+    jq -r ".defaults.${key} // \"${fallback}\"" "$CONFIG_FILE"
+}
+
+DEFAULT_CPUS=$(get_default "cpus" "2")
+DEFAULT_RAM=$(get_default "ram" "2g")
+
+echo "Default resources: ${DEFAULT_CPUS} CPUs, ${DEFAULT_RAM} RAM"
+echo "==========================================="
+echo ""
+
 # Function to get queued jobs for a repository
-get_queued_jobs() {
+get_repo_queued_jobs() {
     local owner_repo="$1"
     local response
 
@@ -61,17 +114,45 @@ get_queued_jobs() {
     echo "$response" | jq -r '.total_count // 0'
 }
 
+# Function to get queued jobs for an organization (across all repos)
+get_org_queued_jobs() {
+    local org="$1"
+    local response
+    local total=0
+
+    # Get queued workflow runs across the org
+    response=$(curl -s -H "Authorization: Bearer $GITHUB_PAT" \
+        -H "Accept: application/vnd.github+json" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        "https://api.github.com/orgs/${org}/actions/runs?status=queued" 2>/dev/null)
+
+    if [ $? -eq 0 ]; then
+        total=$(echo "$response" | jq -r '.total_count // 0')
+    fi
+
+    echo "$total"
+}
+
 # Function to get active runners for a repository
-get_active_runners() {
+get_repo_active_runners() {
     local owner_repo="$1"
     local repo_slug
     repo_slug=$(echo "$owner_repo" | tr '/' '-' | tr '[:upper:]' '[:lower:]')
 
-    docker ps --filter "name=${RUNNER_PREFIX}-${repo_slug}" --format "{{.Names}}" 2>/dev/null | wc -l
+    $RUNTIME ps --filter "name=${RUNNER_PREFIX}-repo-${repo_slug}" --format "{{.Names}}" 2>/dev/null | wc -l
+}
+
+# Function to get active runners for an organization
+get_org_active_runners() {
+    local org="$1"
+    local org_slug
+    org_slug=$(echo "$org" | tr '[:upper:]' '[:lower:]')
+
+    $RUNTIME ps --filter "name=${RUNNER_PREFIX}-org-${org_slug}" --format "{{.Names}}" 2>/dev/null | wc -l
 }
 
 # Function to get a registration token for a repository
-get_registration_token() {
+get_repo_registration_token() {
     local owner_repo="$1"
 
     curl -s -X POST \
@@ -81,39 +162,57 @@ get_registration_token() {
         "https://api.github.com/repos/${owner_repo}/actions/runners/registration-token" | jq -r '.token // empty'
 }
 
-# Function to spawn an ephemeral runner
-spawn_runner() {
+# Function to get a registration token for an organization
+get_org_registration_token() {
+    local org="$1"
+
+    curl -s -X POST \
+        -H "Authorization: Bearer $GITHUB_PAT" \
+        -H "Accept: application/vnd.github+json" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        "https://api.github.com/orgs/${org}/actions/runners/registration-token" | jq -r '.token // empty'
+}
+
+# Function to spawn a repository-level ephemeral runner
+spawn_repo_runner() {
     local owner_repo="$1"
+    local cpus="$2"
+    local ram="$3"
     local owner="${owner_repo%%/*}"
     local repo="${owner_repo##*/}"
     local repo_slug
     repo_slug=$(echo "$owner_repo" | tr '/' '-' | tr '[:upper:]' '[:lower:]')
 
     # Generate unique runner ID
-    local runner_id="${RUNNER_PREFIX}-${repo_slug}-$(date +%s)-$(head -c 4 /dev/urandom | xxd -p)"
+    local runner_id="${RUNNER_PREFIX}-repo-${repo_slug}-$(date +%s)-$(head -c 4 /dev/urandom | xxd -p)"
 
-    echo "  Spawning runner: $runner_id for $owner_repo"
+    echo "  Spawning repo runner: $runner_id"
+    echo "    Target: $owner_repo"
+    echo "    Resources: ${cpus} CPUs, ${ram} RAM"
 
     # Get registration token
     local reg_token
-    reg_token=$(get_registration_token "$owner_repo")
+    reg_token=$(get_repo_registration_token "$owner_repo")
 
     if [ -z "$reg_token" ]; then
         echo "  ERROR: Failed to get registration token for $owner_repo"
         return 1
     fi
 
+    # Build volume mount for container socket
+    local socket_mount=""
+    if [ -n "$CONTAINER_SOCKET" ]; then
+        socket_mount="-v ${CONTAINER_SOCKET}:/var/run/docker.sock"
+    fi
+
     # Spawn the ephemeral runner container
-    # Key points:
-    # - Uses host Docker socket (NOT docker-in-docker)
-    # - --ephemeral flag means it runs ONE job then exits
-    # - Container is removed after exit (--rm would auto-remove, but we want to see exit status)
-    docker run -d \
+    $RUNTIME run -d \
         --name "$runner_id" \
-        --network "$DOCKER_NETWORK" \
-        --cpus="$CONTAINER_CPU" \
-        --memory="$CONTAINER_MEMORY" \
-        -v /var/run/docker.sock:/var/run/docker.sock \
+        --network "$CONTAINER_NETWORK" \
+        --cpus="$cpus" \
+        --memory="$ram" \
+        $socket_mount \
+        -e RUNNER_TYPE="repo" \
         -e GITHUB_ACTIONS_USER_NAME="$owner" \
         -e GITHUB_ACTIONS_REPOSITORIES="$repo" \
         -e GITHUB_ACTIONS_RUNNER_REGISTRATION_TOKEN="$reg_token" \
@@ -130,50 +229,148 @@ spawn_runner() {
     fi
 }
 
+# Function to spawn an organization-level ephemeral runner
+spawn_org_runner() {
+    local org="$1"
+    local cpus="$2"
+    local ram="$3"
+    local org_slug
+    org_slug=$(echo "$org" | tr '[:upper:]' '[:lower:]')
+
+    # Generate unique runner ID
+    local runner_id="${RUNNER_PREFIX}-org-${org_slug}-$(date +%s)-$(head -c 4 /dev/urandom | xxd -p)"
+
+    echo "  Spawning org runner: $runner_id"
+    echo "    Target: $org (organization)"
+    echo "    Resources: ${cpus} CPUs, ${ram} RAM"
+
+    # Get registration token
+    local reg_token
+    reg_token=$(get_org_registration_token "$org")
+
+    if [ -z "$reg_token" ]; then
+        echo "  ERROR: Failed to get registration token for org $org"
+        return 1
+    fi
+
+    # Build volume mount for container socket
+    local socket_mount=""
+    if [ -n "$CONTAINER_SOCKET" ]; then
+        socket_mount="-v ${CONTAINER_SOCKET}:/var/run/docker.sock"
+    fi
+
+    # Spawn the ephemeral runner container
+    $RUNTIME run -d \
+        --name "$runner_id" \
+        --network "$CONTAINER_NETWORK" \
+        --cpus="$cpus" \
+        --memory="$ram" \
+        $socket_mount \
+        -e RUNNER_TYPE="org" \
+        -e GITHUB_ACTIONS_ORGANIZATION_NAME="$org" \
+        -e GITHUB_ACTIONS_RUNNER_REGISTRATION_TOKEN="$reg_token" \
+        -e RUNNER_NAME="$runner_id" \
+        -e RUNNER_LABELS="${org}-runner,ephemeral,org-runner" \
+        "$RUNNER_IMAGE" >/dev/null 2>&1
+
+    if [ $? -eq 0 ]; then
+        echo "  Started: $runner_id"
+        return 0
+    else
+        echo "  ERROR: Failed to start runner $runner_id"
+        return 1
+    fi
+}
+
 # Function to cleanup exited runner containers
 cleanup_exited_runners() {
     local exited_containers
-    exited_containers=$(docker ps -a --filter "name=${RUNNER_PREFIX}" --filter "status=exited" --format "{{.Names}}" 2>/dev/null)
+    exited_containers=$($RUNTIME ps -a --filter "name=${RUNNER_PREFIX}" --filter "status=exited" --format "{{.Names}}" 2>/dev/null)
 
     for container in $exited_containers; do
         echo "  Cleaning up exited runner: $container"
-        docker rm "$container" >/dev/null 2>&1 || true
+        $RUNTIME rm "$container" >/dev/null 2>&1 || true
     done
 }
 
-# Function to process a single repository
-process_repo() {
-    local owner_repo="$1"
-    local max_runners="$2"
+# Function to process repositories from config
+process_repos() {
+    local repos
+    repos=$(jq -r '.repos // {} | keys[]' "$CONFIG_FILE" 2>/dev/null)
 
-    local queued_jobs
-    local active_runners
+    for owner_repo in $repos; do
+        local max_count cpus ram
+        max_count=$(jq -r ".repos[\"${owner_repo}\"].max_count // 1" "$CONFIG_FILE")
+        cpus=$(jq -r ".repos[\"${owner_repo}\"].cpus // \"${DEFAULT_CPUS}\"" "$CONFIG_FILE")
+        ram=$(jq -r ".repos[\"${owner_repo}\"].ram // \"${DEFAULT_RAM}\"" "$CONFIG_FILE")
 
-    queued_jobs=$(get_queued_jobs "$owner_repo")
-    active_runners=$(get_active_runners "$owner_repo")
+        local queued_jobs active_runners
+        queued_jobs=$(get_repo_queued_jobs "$owner_repo")
+        active_runners=$(get_repo_active_runners "$owner_repo")
 
-    echo "[$owner_repo] Queued: $queued_jobs, Active: $active_runners, Max: $max_runners"
+        echo "[REPO: $owner_repo] Queued: $queued_jobs, Active: $active_runners, Max: $max_count"
 
-    # Calculate how many runners we need to spawn
-    if [ "$queued_jobs" -gt "$active_runners" ] && [ "$active_runners" -lt "$max_runners" ]; then
-        local runners_needed=$((queued_jobs - active_runners))
-        local runners_available=$((max_runners - active_runners))
-        local runners_to_spawn
+        # Calculate how many runners we need to spawn
+        if [ "$queued_jobs" -gt "$active_runners" ] && [ "$active_runners" -lt "$max_count" ]; then
+            local runners_needed=$((queued_jobs - active_runners))
+            local runners_available=$((max_count - active_runners))
+            local runners_to_spawn
 
-        # Don't exceed the ceiling
-        if [ "$runners_needed" -gt "$runners_available" ]; then
-            runners_to_spawn=$runners_available
-        else
-            runners_to_spawn=$runners_needed
+            # Don't exceed the ceiling
+            if [ "$runners_needed" -gt "$runners_available" ]; then
+                runners_to_spawn=$runners_available
+            else
+                runners_to_spawn=$runners_needed
+            fi
+
+            echo "  Spawning $runners_to_spawn runner(s)..."
+            for i in $(seq 1 $runners_to_spawn); do
+                spawn_repo_runner "$owner_repo" "$cpus" "$ram"
+                # Small delay between spawns to avoid rate limiting
+                sleep 1
+            done
         fi
+    done
+}
 
-        echo "  Spawning $runners_to_spawn runner(s)..."
-        for i in $(seq 1 $runners_to_spawn); do
-            spawn_runner "$owner_repo"
-            # Small delay between spawns to avoid rate limiting
-            sleep 1
-        done
-    fi
+# Function to process organizations from config
+process_orgs() {
+    local orgs
+    orgs=$(jq -r '.orgs // {} | keys[]' "$CONFIG_FILE" 2>/dev/null)
+
+    for org in $orgs; do
+        local max_count cpus ram
+        max_count=$(jq -r ".orgs[\"${org}\"].max_count // 1" "$CONFIG_FILE")
+        cpus=$(jq -r ".orgs[\"${org}\"].cpus // \"${DEFAULT_CPUS}\"" "$CONFIG_FILE")
+        ram=$(jq -r ".orgs[\"${org}\"].ram // \"${DEFAULT_RAM}\"" "$CONFIG_FILE")
+
+        local queued_jobs active_runners
+        queued_jobs=$(get_org_queued_jobs "$org")
+        active_runners=$(get_org_active_runners "$org")
+
+        echo "[ORG: $org] Queued: $queued_jobs, Active: $active_runners, Max: $max_count"
+
+        # Calculate how many runners we need to spawn
+        if [ "$queued_jobs" -gt "$active_runners" ] && [ "$active_runners" -lt "$max_count" ]; then
+            local runners_needed=$((queued_jobs - active_runners))
+            local runners_available=$((max_count - active_runners))
+            local runners_to_spawn
+
+            # Don't exceed the ceiling
+            if [ "$runners_needed" -gt "$runners_available" ]; then
+                runners_to_spawn=$runners_available
+            else
+                runners_to_spawn=$runners_needed
+            fi
+
+            echo "  Spawning $runners_to_spawn runner(s)..."
+            for i in $(seq 1 $runners_to_spawn); do
+                spawn_org_runner "$org" "$cpus" "$ram"
+                # Small delay between spawns to avoid rate limiting
+                sleep 1
+            done
+        fi
+    done
 }
 
 # Graceful shutdown handler
@@ -186,7 +383,6 @@ shutdown() {
 
 trap shutdown INT TERM
 
-echo ""
 echo "Starting main control loop..."
 echo ""
 
@@ -197,13 +393,11 @@ while true; do
     # First, cleanup any exited runners
     cleanup_exited_runners
 
-    # Read config and process each repository
-    # Format: {"owner/repo": max_runners, ...}
-    while IFS="=" read -r owner_repo max_runners; do
-        # Skip empty lines
-        [ -z "$owner_repo" ] && continue
-        process_repo "$owner_repo" "$max_runners"
-    done < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' "$CONFIG_FILE")
+    # Process repositories (personal repos need individual runners)
+    process_repos
+
+    # Process organizations (shared runners across org repos)
+    process_orgs
 
     echo ""
     sleep "$POLL_INTERVAL"

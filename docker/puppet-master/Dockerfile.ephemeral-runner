@@ -2,10 +2,13 @@
 # Lightweight ephemeral GitHub Actions runner
 #
 # Key design decisions:
-# - Uses HOST Docker socket (NOT docker-in-docker) - much lighter
+# - Uses HOST Docker/Podman socket (NOT docker-in-docker) - much lighter
 # - Runs ONE job then exits (--ephemeral flag)
 # - No persistent state = no cache pollution
 # - Minimal footprint for fast startup
+# - Supports both repo-level and org-level registration
+#
+# Compatible with both Docker and Podman runtimes
 
 FROM ubuntu:22.04
 
@@ -23,7 +26,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     lsb-release \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Docker CLI only (we use host Docker socket, not our own daemon)
+# Install Docker CLI only (we use host Docker/Podman socket, not our own daemon)
+# Docker CLI is compatible with Podman's docker-compatible socket
 RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg && \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null && \
     apt-get update && \
@@ -50,25 +54,28 @@ COPY ephemeral-runner-entrypoint.sh /home/docker/
 RUN chmod +x /home/docker/ephemeral-runner-entrypoint.sh && \
     chown docker:docker /home/docker/ephemeral-runner-entrypoint.sh
 
-# Create init script to handle Docker socket permissions
+# Create init script to handle Docker/Podman socket permissions
+# This works with both Docker socket and Podman's docker-compatible socket
 RUN cat > /docker-init.sh << 'INITSCRIPT'
 #!/bin/bash
 set -e
 
-# Handle Docker socket permissions
-if [ -e /var/run/docker.sock ]; then
-    HOST_DOCKER_GID=$(stat -c "%g" /var/run/docker.sock)
+# Handle container socket permissions (Docker or Podman)
+SOCKET_PATH="/var/run/docker.sock"
+
+if [ -e "$SOCKET_PATH" ]; then
+    HOST_SOCKET_GID=$(stat -c "%g" "$SOCKET_PATH")
 
     # Create group with matching GID if needed
-    if ! getent group docker-host >/dev/null 2>&1; then
-        groupadd -g "$HOST_DOCKER_GID" docker-host 2>/dev/null || true
+    if ! getent group "$HOST_SOCKET_GID" >/dev/null 2>&1; then
+        groupadd -g "$HOST_SOCKET_GID" container-socket 2>/dev/null || true
     fi
 
     # Add docker user to the group
-    usermod -aG "$HOST_DOCKER_GID" docker 2>/dev/null || true
+    usermod -aG "$HOST_SOCKET_GID" docker 2>/dev/null || true
 
-    # Ensure socket is accessible
-    chmod 666 /var/run/docker.sock 2>/dev/null || true
+    # Ensure socket is accessible (may fail if read-only, that's ok)
+    chmod 666 "$SOCKET_PATH" 2>/dev/null || true
 fi
 
 # Switch to docker user and run the entrypoint

@@ -6,13 +6,15 @@
 #
 # Usage:
 #   1. Copy .env.example to .env and fill in your GitHub PAT
-#   2. Edit count.json with your repos and runner ceilings
-#   3. Run: docker-compose up -d
+#   2. Copy config.json.example to config.json and configure repos/orgs
+#   3. Run: docker-compose up -d (or: podman-compose up -d)
 #
 # The puppet master will:
 # - Poll GitHub API every POLL_INTERVAL seconds
 # - Spawn ephemeral runners (up to ceiling) when jobs are queued
 # - Clean up runners after they complete their single job
+#
+# Compatible with both Docker and Podman
 
 services:
   puppet-master:
@@ -25,14 +27,18 @@ services:
       - GITHUB_PAT=${GITHUB_PAT}
       - POLL_INTERVAL=${POLL_INTERVAL:-30}
       - RUNNER_IMAGE=${RUNNER_IMAGE:-gh-ephemeral-runner:latest}
-      - DOCKER_NETWORK=${DOCKER_NETWORK:-github-runners}
-      - CONTAINER_CPU=${CONTAINER_CPU:-2}
-      - CONTAINER_MEMORY=${CONTAINER_MEMORY:-2g}
+      - CONTAINER_NETWORK=${CONTAINER_NETWORK:-github-runners}
     volumes:
-      # Docker socket access - this is how we spawn ephemeral runners
+      # Docker socket - uncomment ONE of these based on your runtime:
+      # For Docker:
       - /var/run/docker.sock:/var/run/docker.sock
+      # For Podman (rootful):
+      # - /var/run/podman/podman.sock:/var/run/docker.sock
+      # For Podman (rootless) - replace $UID with your user ID:
+      # - /run/user/$UID/podman/podman.sock:/var/run/docker.sock
+
       # Mount the config file
-      - ./count.json:/config/count.json:ro
+      - ./config.json:/config/config.json:ro
     networks:
       - runner-network
 
