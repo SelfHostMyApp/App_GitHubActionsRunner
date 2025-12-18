@@ -4,16 +4,20 @@
 # Supports both Docker and Podman runtimes
 #
 # Usage:
-#   ./setup.sh          # Build images
+#   ./setup.sh          # Show help
 #   ./setup.sh start    # Build and start
 #   ./setup.sh stop     # Stop puppet master
 #   ./setup.sh logs     # View logs
 #   ./setup.sh status   # Show running containers
 
-set -e
+# Don't use set -e so we can show errors properly
+# set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+
+# Trap errors and show them
+trap 'echo ""; echo "ERROR: Script failed at line $LINENO. Exit code: $?"; read -p "Press Enter to exit..."' ERR
 
 # Colors for output
 RED='\033[0;31m'
@@ -26,6 +30,14 @@ log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_step() { echo -e "${BLUE}[STEP]${NC} $1"; }
+
+# Exit with error, pausing so user can see message
+die() {
+    log_error "$1"
+    echo ""
+    read -p "Press Enter to exit..."
+    exit 1
+}
 
 # Detect container runtime
 detect_runtime() {
@@ -81,8 +93,7 @@ check_prerequisites() {
     log_step "Checking prerequisites..."
 
     if [ -z "$RUNTIME" ]; then
-        log_error "Neither Docker nor Podman is available or running"
-        exit 1
+        die "Neither Docker nor Podman is available or running"
     fi
     log_info "Container runtime: $RUNTIME"
 
@@ -103,30 +114,25 @@ check_prerequisites() {
         if [ -f ".env.example" ]; then
             log_warn ".env file not found. Creating from .env.example"
             cp .env.example .env
-            log_error "Please edit .env and set your GITHUB_PAT, then run again"
-            exit 1
+            die "Please edit .env and set your GITHUB_PAT, then run again"
         else
-            log_error ".env file not found and no .env.example to copy"
-            exit 1
+            die ".env file not found and no .env.example to copy"
         fi
     fi
 
     # Source .env to check GITHUB_PAT
     source .env
     if [ -z "$GITHUB_PAT" ] || [ "$GITHUB_PAT" = "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" ]; then
-        log_error "GITHUB_PAT not set in .env file"
-        exit 1
+        die "GITHUB_PAT not set in .env file"
     fi
 
     if [ ! -f "config.json" ]; then
         if [ -f "config.json.example" ]; then
             log_warn "config.json not found. Creating from config.json.example"
             cp config.json.example config.json
-            log_error "Please edit config.json with your repositories/organizations, then run again"
-            exit 1
+            die "Please edit config.json with your repositories/organizations, then run again"
         else
-            log_error "config.json not found"
-            exit 1
+            die "config.json not found"
         fi
     fi
 
@@ -296,6 +302,8 @@ case "${1:-help}" in
     *)
         log_error "Unknown command: $1"
         print_usage
+        echo ""
+        read -p "Press Enter to exit..."
         exit 1
         ;;
 esac
