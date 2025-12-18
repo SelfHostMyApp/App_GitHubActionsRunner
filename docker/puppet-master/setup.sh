@@ -155,6 +155,13 @@ build_images() {
 
 start_with_compose() {
     log_step "Starting puppet master with $COMPOSE..."
+
+    # Create network if needed (marked as external in compose file)
+    $RUNTIME network inspect github-runners >/dev/null 2>&1 || {
+        log_info "Creating network: github-runners"
+        $RUNTIME network create github-runners
+    }
+
     $COMPOSE up -d puppet-master
 }
 
