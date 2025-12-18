@@ -8,27 +8,24 @@
 # - Supports both repo-level and org-level registration
 # - Includes build tools for: Rust, Node.js, Python, C#, C++, Make, Docker
 #
+# Install order optimized for Docker cache (least-changing first):
+# 1. Base image (shared with orchestrator)
+# 2. C/C++/Make (stable)
+# 3. Rust (stable)
+# 4. .NET SDK (stable)
+# 5. Node.js (changes more often)
+# 6. Python + conda + uv (changes most often)
+#
 # Compatible with both Docker and Podman runtimes
 
-FROM ubuntu:22.04
+ARG BASE_IMAGE=gh-runner-base:latest
+FROM ${BASE_IMAGE}
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG RUNNER_VERSION=2.324.0
+ARG RUNNER_VERSION=2.330.0
 
-# Install base packages and build essentials
+# Install build essentials (C/C++/Make) - stable layer
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    # Base tools
-    curl \
-    wget \
-    ca-certificates \
-    git \
-    jq \
-    gosu \
-    gnupg \
-    lsb-release \
-    software-properties-common \
-    apt-transport-https \
-    # Build essentials (C/C++/Make)
     build-essential \
     gcc \
     g++ \
@@ -38,27 +35,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     autoconf \
     automake \
     libtool \
-    # Python
-    python3 \
-    python3-pip \
-    python3-venv \
-    python3-dev \
-    # Additional useful tools
-    zip \
-    unzip \
-    tar \
-    gzip \
-    xz-utils \
     libssl-dev \
     libffi-dev \
     zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
-
-# Install Node.js (LTS)
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y nodejs && \
-    npm install -g npm@latest && \
-    rm -rf /var/lib/apt/lists/*
 
 # Install Rust
 ENV RUSTUP_HOME=/usr/local/rustup \
@@ -75,18 +55,41 @@ RUN wget https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-p
     apt-get install -y dotnet-sdk-8.0 && \
     rm -rf /var/lib/apt/lists/*
 
-# Install Docker CLI and tools (we use host Docker/Podman socket, not our own daemon)
-RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg && \
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends \
-        docker-ce-cli \
-        docker-buildx-plugin \
-        docker-compose-plugin && \
+# Install Node.js (LTS) - second-last as it changes more frequently
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    npm install -g npm@latest && \
     rm -rf /var/lib/apt/lists/*
+
+# Install Python toolchain (last - changes most frequently)
+# Includes: Python 3, pip, venv, conda (miniforge), and uv
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    python3-venv \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Miniforge (conda) - lightweight conda distribution
+ENV CONDA_DIR=/opt/conda
+RUN curl -fsSL -o /tmp/miniforge.sh https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh && \
+    bash /tmp/miniforge.sh -b -p $CONDA_DIR && \
+    rm /tmp/miniforge.sh && \
+    $CONDA_DIR/bin/conda clean -afy
+ENV PATH="$CONDA_DIR/bin:$PATH"
+
+# Install uv (fast Python package installer)
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:$PATH"
 
 # Create runner user
 RUN useradd -m -s /bin/bash docker
+
+# Make conda and uv available to docker user
+RUN chmod -R a+rx $CONDA_DIR && \
+    mkdir -p /home/docker/.local/bin && \
+    cp -r /root/.local/bin/* /home/docker/.local/bin/ 2>/dev/null || true && \
+    chown -R docker:docker /home/docker/.local
 
 # Download and extract GitHub Actions runner
 WORKDIR /home/docker
@@ -134,6 +137,6 @@ INITSCRIPT
 RUN chmod +x /docker-init.sh
 
 # Set up environment for all users
-ENV PATH="/usr/local/cargo/bin:$PATH"
+ENV PATH="/home/docker/.local/bin:/usr/local/cargo/bin:$CONDA_DIR/bin:$PATH"
 
 ENTRYPOINT ["/docker-init.sh"]

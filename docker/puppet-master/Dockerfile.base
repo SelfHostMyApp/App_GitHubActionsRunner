@@ -1,0 +1,46 @@
+# Dockerfile.base
+# Common base image for GitHub Actions runner infrastructure
+#
+# Shared by:
+# - Orchestrator (spawns/manages ephemeral runners)
+# - Ephemeral runners (execute GitHub Actions jobs)
+#
+# Contains common dependencies to reduce build time and image layers
+# Compatible with both Docker and Podman runtimes
+
+FROM ubuntu:22.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Install base packages shared by all runner infrastructure
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Core tools
+    curl \
+    wget \
+    ca-certificates \
+    git \
+    jq \
+    gosu \
+    gnupg \
+    lsb-release \
+    software-properties-common \
+    apt-transport-https \
+    xxd \
+    # Compression tools
+    zip \
+    unzip \
+    tar \
+    gzip \
+    xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Docker CLI (compatible with Podman socket too)
+# We only need the CLI - the daemon runs on the host
+RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        docker-ce-cli \
+        docker-buildx-plugin \
+        docker-compose-plugin && \
+    rm -rf /var/lib/apt/lists/*

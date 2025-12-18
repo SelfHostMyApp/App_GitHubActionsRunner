@@ -1,7 +1,7 @@
-# Docker Compose for Puppet Master Architecture
+# Docker Compose for GitHub Actions Runner Orchestrator
 #
 # This deploys:
-# 1. The Puppet Master container (orchestrator)
+# 1. The Orchestrator container (manages ephemeral runners)
 # 2. Pre-builds the ephemeral runner image
 #
 # Usage:
@@ -9,7 +9,7 @@
 #   2. Copy config.json.example to config.json and configure repos/orgs
 #   3. Run: docker-compose up -d (or: podman-compose up -d)
 #
-# The puppet master will:
+# The orchestrator will:
 # - Poll GitHub API every POLL_INTERVAL seconds
 # - Spawn ephemeral runners (up to ceiling) when jobs are queued
 # - Clean up runners after they complete their single job
@@ -17,9 +17,9 @@
 # Compatible with both Docker and Podman
 
 services:
-  puppet-master:
-    container_name: gh-puppet-master
-    image: gh-puppet-master:latest
+  orchestrator:
+    container_name: gh-orchestrator
+    image: gh-orchestrator:latest
     restart: unless-stopped
     environment:
       - GITHUB_PAT=${GITHUB_PAT}

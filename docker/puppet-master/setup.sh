@@ -1,12 +1,12 @@
 #!/bin/bash
-# setup.sh - Build and prepare the Puppet Master architecture
+# setup.sh - Build and prepare the GitHub Actions Runner Orchestrator
 #
 # Supports both Docker and Podman runtimes
 #
 # Usage:
 #   ./setup.sh          # Show help
 #   ./setup.sh start    # Build and start
-#   ./setup.sh stop     # Stop puppet master
+#   ./setup.sh stop     # Stop orchestrator
 #   ./setup.sh logs     # View logs
 #   ./setup.sh status   # Show running containers
 
@@ -85,6 +85,20 @@ detect_socket() {
     fi
 }
 
+# Fetch latest GitHub Actions runner version from API
+get_latest_runner_version() {
+    local version
+    version=$(curl -s https://api.github.com/repos/actions/runner/releases/latest | jq -r '.tag_name // empty' 2>/dev/null)
+
+    if [ -n "$version" ]; then
+        # Remove 'v' prefix if present
+        echo "${version#v}"
+    else
+        # Fallback to known good version if API fails
+        echo "2.330.0"
+    fi
+}
+
 RUNTIME=$(detect_runtime)
 COMPOSE=$(detect_compose "$RUNTIME")
 SOCKET=$(detect_socket)
@@ -143,18 +157,47 @@ check_prerequisites() {
 build_images() {
     log_step "Building container images..."
 
-    log_info "Building ephemeral runner image..."
-    $RUNTIME build -t gh-ephemeral-runner:latest -f Dockerfile.ephemeral-runner .
+    # Fetch latest runner version
+    log_info "Fetching latest GitHub Actions runner version..."
+    RUNNER_VERSION=$(get_latest_runner_version)
+    log_info "Using runner version: $RUNNER_VERSION"
 
-    log_info "Building puppet master image..."
-    $RUNTIME build -t gh-puppet-master:latest -f Dockerfile.puppet-master .
+    # Build base image first (shared by orchestrator and ephemeral runner)
+    log_info "Building base image..."
+    $RUNTIME build -t gh-runner-base:latest -f Dockerfile.base .
+
+    # Build orchestrator and ephemeral runner in parallel
+    log_info "Building orchestrator and ephemeral runner images (parallel)..."
+
+    # Start both builds in background
+    $RUNTIME build -t gh-orchestrator:latest -f Dockerfile.orchestrator \
+        --build-arg BASE_IMAGE=gh-runner-base:latest . &
+    BUILD_ORCH_PID=$!
+
+    $RUNTIME build -t gh-ephemeral-runner:latest -f Dockerfile.ephemeral-runner \
+        --build-arg BASE_IMAGE=gh-runner-base:latest \
+        --build-arg RUNNER_VERSION="$RUNNER_VERSION" . &
+    BUILD_RUNNER_PID=$!
+
+    # Wait for both builds to complete
+    wait $BUILD_ORCH_PID
+    ORCH_EXIT=$?
+    wait $BUILD_RUNNER_PID
+    RUNNER_EXIT=$?
+
+    if [ $ORCH_EXIT -ne 0 ]; then
+        die "Failed to build orchestrator image"
+    fi
+    if [ $RUNNER_EXIT -ne 0 ]; then
+        die "Failed to build ephemeral runner image"
+    fi
 
     log_info "Images built successfully"
     echo ""
 }
 
 start_with_compose() {
-    log_step "Starting puppet master with $COMPOSE..."
+    log_step "Starting orchestrator with $COMPOSE..."
 
     # Create network if needed (marked as external in compose file)
     $RUNTIME network inspect github-runners >/dev/null 2>&1 || {
@@ -162,11 +205,11 @@ start_with_compose() {
         $RUNTIME network create github-runners
     }
 
-    $COMPOSE up -d puppet-master
+    $COMPOSE up -d orchestrator
 }
 
 start_without_compose() {
-    log_step "Starting puppet master with $RUNTIME..."
+    log_step "Starting orchestrator with $RUNTIME..."
 
     # Source environment
     source .env
@@ -178,8 +221,8 @@ start_without_compose() {
     }
 
     # Stop existing container if running
-    $RUNTIME stop gh-puppet-master 2>/dev/null || true
-    $RUNTIME rm gh-puppet-master 2>/dev/null || true
+    $RUNTIME stop gh-orchestrator 2>/dev/null || true
+    $RUNTIME rm gh-orchestrator 2>/dev/null || true
 
     # Determine socket mount
     local socket_mount=""
@@ -187,9 +230,9 @@ start_without_compose() {
         socket_mount="-v ${SOCKET}:/var/run/docker.sock"
     fi
 
-    # Start the puppet master
+    # Start the orchestrator
     $RUNTIME run -d \
-        --name gh-puppet-master \
+        --name gh-orchestrator \
         --network github-runners \
         --restart unless-stopped \
         $socket_mount \
@@ -198,7 +241,7 @@ start_without_compose() {
         -e POLL_INTERVAL="${POLL_INTERVAL:-30}" \
         -e RUNNER_IMAGE="${RUNNER_IMAGE:-gh-ephemeral-runner:latest}" \
         -e CONTAINER_NETWORK="${CONTAINER_NETWORK:-github-runners}" \
-        gh-puppet-master:latest
+        gh-orchestrator:latest
 }
 
 start() {
@@ -211,21 +254,21 @@ start() {
         start_without_compose
     fi
 
-    log_info "Puppet master started!"
+    log_info "Orchestrator started!"
     echo ""
     log_info "View logs with: ./setup.sh logs"
     log_info "Check status with: ./setup.sh status"
 }
 
 stop() {
-    log_step "Stopping puppet master..."
+    log_step "Stopping orchestrator..."
 
     if [ -n "$COMPOSE" ]; then
         $COMPOSE down 2>/dev/null || true
     fi
 
-    $RUNTIME stop gh-puppet-master 2>/dev/null || true
-    $RUNTIME rm gh-puppet-master 2>/dev/null || true
+    $RUNTIME stop gh-orchestrator 2>/dev/null || true
+    $RUNTIME rm gh-orchestrator 2>/dev/null || true
 
     # Also stop any orphaned ephemeral runners
     log_info "Stopping any orphaned ephemeral runners..."
@@ -237,9 +280,9 @@ stop() {
 
 logs() {
     if [ -n "$COMPOSE" ]; then
-        $COMPOSE logs -f puppet-master
+        $COMPOSE logs -f orchestrator
     else
-        $RUNTIME logs -f gh-puppet-master
+        $RUNTIME logs -f gh-orchestrator
     fi
 }
 
@@ -248,9 +291,9 @@ status() {
     log_info "Container Runtime: $RUNTIME"
     echo ""
 
-    log_info "Puppet Master Status:"
-    $RUNTIME ps --filter "name=gh-puppet-master" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" 2>/dev/null || \
-        $RUNTIME ps --filter "name=gh-puppet-master"
+    log_info "Orchestrator Status:"
+    $RUNTIME ps --filter "name=gh-orchestrator" --format "table {{.Names}}\t{{.Status}}\t{{.Image}}" 2>/dev/null || \
+        $RUNTIME ps --filter "name=gh-orchestrator"
 
     echo ""
     log_info "Active Ephemeral Runners:"
@@ -277,9 +320,9 @@ print_usage() {
     echo ""
     echo "Commands:"
     echo "  build   - Build container images"
-    echo "  start   - Build images and start puppet master"
-    echo "  stop    - Stop puppet master and cleanup runners"
-    echo "  logs    - View puppet master logs (follow mode)"
+    echo "  start   - Build images and start orchestrator"
+    echo "  stop    - Stop orchestrator and cleanup runners"
+    echo "  logs    - View orchestrator logs (follow mode)"
     echo "  status  - Show status of all runner containers"
     echo ""
     echo "Detected runtime: ${RUNTIME:-none}"

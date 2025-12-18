@@ -1,0 +1,33 @@
+# Dockerfile.orchestrator
+# The "Orchestrator" - manages ephemeral GitHub Actions runners
+#
+# This container:
+# - Has access to the Docker/Podman socket
+# - Reads config.json for per-repo/org runner settings
+# - Polls GitHub API for queued jobs
+# - Spawns ephemeral runner containers when jobs are detected
+# - Cleans up completed runners
+# - Never runs jobs itself - only orchestrates
+#
+# Compatible with both Docker and Podman runtimes
+
+ARG BASE_IMAGE=gh-runner-base:latest
+FROM ${BASE_IMAGE}
+
+# Create config directory
+RUN mkdir -p /config
+
+# Copy the orchestrator script
+COPY orchestrator.sh /orchestrator.sh
+RUN chmod +x /orchestrator.sh
+
+# Default environment variables
+ENV POLL_INTERVAL=30
+ENV CONTAINER_NETWORK=github-runners
+ENV CONFIG_FILE=/config/config.json
+
+# The socket path is auto-detected, but can be overridden:
+# Docker: /var/run/docker.sock
+# Podman: /var/run/podman/podman.sock or /run/podman/podman.sock
+
+ENTRYPOINT ["/orchestrator.sh"]

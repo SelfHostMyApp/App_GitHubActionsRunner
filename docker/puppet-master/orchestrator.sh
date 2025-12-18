@@ -1,5 +1,5 @@
 #!/bin/bash
-# puppet-master.sh - Orchestrates ephemeral GitHub Actions runners
+# orchestrator.sh - Orchestrates ephemeral GitHub Actions runners
 #
 # Architecture:
 # - Single container with Docker/Podman socket access
@@ -12,6 +12,7 @@
 # - Organization-level runners (shared across org repos)
 # - Per-entry resource limits (cpus, ram)
 # - Docker and Podman runtimes
+# - Multiple orchestrators (uses GitHub API for runner count, not local containers)
 
 set -e
 
@@ -21,9 +22,6 @@ GITHUB_PAT="${GITHUB_PAT:?GITHUB_PAT is required}"
 POLL_INTERVAL="${POLL_INTERVAL:-30}"
 RUNNER_IMAGE="${RUNNER_IMAGE:-ghcr.io/selfhostmyapp/ephemeral-runner:latest}"
 CONTAINER_NETWORK="${CONTAINER_NETWORK:-github-runners}"
-
-# Prefix for all spawned runner containers
-RUNNER_PREFIX="ephemeral-runner"
 
 # Detect container runtime (Docker or Podman)
 detect_runtime() {
@@ -60,7 +58,7 @@ detect_socket() {
 CONTAINER_SOCKET=$(detect_socket)
 
 echo "==========================================="
-echo "  GitHub Actions Puppet Master Controller"
+echo "  GitHub Actions Runner Orchestrator"
 echo "==========================================="
 echo "Runtime: ${RUNTIME}"
 echo "Socket: ${CONTAINER_SOCKET:-not mounted (using default)}"
@@ -93,6 +91,7 @@ DEFAULT_CPUS=$(get_default "cpus" "2")
 DEFAULT_RAM=$(get_default "ram" "2g")
 
 echo "Default resources: ${DEFAULT_CPUS} CPUs, ${DEFAULT_RAM} RAM"
+echo "Multi-orchestrator safe: Yes (uses GitHub API for runner counts)"
 echo "==========================================="
 echo ""
 
@@ -133,26 +132,43 @@ get_org_queued_jobs() {
     echo "$total"
 }
 
-# Function to get active runners for a repository
-get_repo_active_runners() {
+# Function to get REGISTERED runners for a repository (from GitHub API)
+# This allows multiple puppet masters to coordinate - they all see the same count
+get_repo_registered_runners() {
     local owner_repo="$1"
-    local repo_slug
-    repo_slug=$(echo "$owner_repo" | tr '/' '-' | tr '[:upper:]' '[:lower:]')
-    # Match shortened slug (first 45 chars) with eph-r- prefix
-    local short_slug="${repo_slug:0:45}"
+    local response
 
-    $RUNTIME ps --filter "name=eph-r-${short_slug}" --format "{{.Names}}" 2>/dev/null | wc -l
+    response=$(curl -s -H "Authorization: Bearer $GITHUB_PAT" \
+        -H "Accept: application/vnd.github+json" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        "https://api.github.com/repos/${owner_repo}/actions/runners" 2>/dev/null)
+
+    if [ $? -ne 0 ]; then
+        echo "0"
+        return
+    fi
+
+    # Count online runners only (busy or idle, not offline)
+    echo "$response" | jq -r '[.runners[] | select(.status == "online")] | length // 0'
 }
 
-# Function to get active runners for an organization
-get_org_active_runners() {
+# Function to get REGISTERED runners for an organization (from GitHub API)
+get_org_registered_runners() {
     local org="$1"
-    local org_slug
-    org_slug=$(echo "$org" | tr '[:upper:]' '[:lower:]')
-    # Match shortened slug (first 45 chars) with eph-o- prefix
-    local short_slug="${org_slug:0:45}"
+    local response
 
-    $RUNTIME ps --filter "name=eph-o-${short_slug}" --format "{{.Names}}" 2>/dev/null | wc -l
+    response=$(curl -s -H "Authorization: Bearer $GITHUB_PAT" \
+        -H "Accept: application/vnd.github+json" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        "https://api.github.com/orgs/${org}/actions/runners" 2>/dev/null)
+
+    if [ $? -ne 0 ]; then
+        echo "0"
+        return
+    fi
+
+    # Count online runners only
+    echo "$response" | jq -r '[.runners[] | select(.status == "online")] | length // 0'
 }
 
 # Function to get a registration token for a repository
@@ -292,7 +308,7 @@ spawn_org_runner() {
     fi
 }
 
-# Function to cleanup exited runner containers
+# Function to cleanup exited runner containers (local only)
 cleanup_exited_runners() {
     local exited_containers
     # Match both eph-r- (repo) and eph-o- (org) prefixes
@@ -315,16 +331,23 @@ process_repos() {
         cpus=$(jq -r ".repos[\"${owner_repo}\"].cpus // \"${DEFAULT_CPUS}\"" "$CONFIG_FILE")
         ram=$(jq -r ".repos[\"${owner_repo}\"].ram // \"${DEFAULT_RAM}\"" "$CONFIG_FILE")
 
-        local queued_jobs active_runners
+        local queued_jobs registered_runners
         queued_jobs=$(get_repo_queued_jobs "$owner_repo")
-        active_runners=$(get_repo_active_runners "$owner_repo")
 
-        echo "[REPO: $owner_repo] Queued: $queued_jobs, Active: $active_runners, Max: $max_count"
+        # Only check registered runners if there are queued jobs (reduces API calls)
+        if [ "$queued_jobs" -gt 0 ]; then
+            # Use GitHub API to get runner count (works across multiple puppet masters)
+            registered_runners=$(get_repo_registered_runners "$owner_repo")
+            echo "[REPO: $owner_repo] Queued: $queued_jobs, Registered: $registered_runners, Max: $max_count"
+        else
+            echo "[REPO: $owner_repo] Queued: 0 (idle)"
+            continue
+        fi
 
         # Calculate how many runners we need to spawn
-        if [ "$queued_jobs" -gt "$active_runners" ] && [ "$active_runners" -lt "$max_count" ]; then
-            local runners_needed=$((queued_jobs - active_runners))
-            local runners_available=$((max_count - active_runners))
+        if [ "$queued_jobs" -gt "$registered_runners" ] && [ "$registered_runners" -lt "$max_count" ]; then
+            local runners_needed=$((queued_jobs - registered_runners))
+            local runners_available=$((max_count - registered_runners))
             local runners_to_spawn
 
             # Don't exceed the ceiling
@@ -338,7 +361,7 @@ process_repos() {
             for i in $(seq 1 $runners_to_spawn); do
                 spawn_repo_runner "$owner_repo" "$cpus" "$ram"
                 # Small delay between spawns to avoid rate limiting
-                sleep 1
+                sleep 2
             done
         fi
     done
@@ -355,16 +378,23 @@ process_orgs() {
         cpus=$(jq -r ".orgs[\"${org}\"].cpus // \"${DEFAULT_CPUS}\"" "$CONFIG_FILE")
         ram=$(jq -r ".orgs[\"${org}\"].ram // \"${DEFAULT_RAM}\"" "$CONFIG_FILE")
 
-        local queued_jobs active_runners
+        local queued_jobs registered_runners
         queued_jobs=$(get_org_queued_jobs "$org")
-        active_runners=$(get_org_active_runners "$org")
 
-        echo "[ORG: $org] Queued: $queued_jobs, Active: $active_runners, Max: $max_count"
+        # Only check registered runners if there are queued jobs (reduces API calls)
+        if [ "$queued_jobs" -gt 0 ]; then
+            # Use GitHub API to get runner count (works across multiple puppet masters)
+            registered_runners=$(get_org_registered_runners "$org")
+            echo "[ORG: $org] Queued: $queued_jobs, Registered: $registered_runners, Max: $max_count"
+        else
+            echo "[ORG: $org] Queued: 0 (idle)"
+            continue
+        fi
 
         # Calculate how many runners we need to spawn
-        if [ "$queued_jobs" -gt "$active_runners" ] && [ "$active_runners" -lt "$max_count" ]; then
-            local runners_needed=$((queued_jobs - active_runners))
-            local runners_available=$((max_count - active_runners))
+        if [ "$queued_jobs" -gt "$registered_runners" ] && [ "$registered_runners" -lt "$max_count" ]; then
+            local runners_needed=$((queued_jobs - registered_runners))
+            local runners_available=$((max_count - registered_runners))
             local runners_to_spawn
 
             # Don't exceed the ceiling
@@ -378,7 +408,7 @@ process_orgs() {
             for i in $(seq 1 $runners_to_spawn); do
                 spawn_org_runner "$org" "$cpus" "$ram"
                 # Small delay between spawns to avoid rate limiting
-                sleep 1
+                sleep 2
             done
         fi
     done
@@ -387,7 +417,7 @@ process_orgs() {
 # Graceful shutdown handler
 shutdown() {
     echo ""
-    echo "Shutting down puppet master..."
+    echo "Shutting down orchestrator..."
     echo "Note: Running ephemeral runners will complete their jobs."
     exit 0
 }
@@ -401,7 +431,7 @@ echo ""
 while true; do
     echo "--- $(date '+%Y-%m-%d %H:%M:%S') ---"
 
-    # First, cleanup any exited runners
+    # First, cleanup any exited runners (local containers only)
     cleanup_exited_runners
 
     # Process repositories (personal repos need individual runners)
