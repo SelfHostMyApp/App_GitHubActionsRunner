@@ -1,0 +1,47 @@
+# Dockerfile.puppet-master
+# The "Puppet Master" - orchestrates ephemeral GitHub Actions runners
+#
+# This container:
+# - Has access to the Docker socket
+# - Reads count.json to know runner ceilings per repo
+# - Polls GitHub API for queued jobs
+# - Spawns ephemeral runner containers when jobs are detected
+# - Cleans up completed runners
+# - Never runs jobs itself - only orchestrates
+
+FROM ubuntu:22.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Install minimal required packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    jq \
+    gnupg \
+    lsb-release \
+    xxd \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Docker CLI (we need to spawn containers via Docker socket)
+RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends docker-ce-cli && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create config directory
+RUN mkdir -p /config
+
+# Copy the puppet master script
+COPY puppet-master.sh /puppet-master.sh
+RUN chmod +x /puppet-master.sh
+
+# Default environment variables
+ENV POLL_INTERVAL=30
+ENV DOCKER_NETWORK=github-runners
+ENV CONTAINER_CPU=2
+ENV CONTAINER_MEMORY=2g
+ENV CONFIG_FILE=/config/count.json
+
+ENTRYPOINT ["/puppet-master.sh"]

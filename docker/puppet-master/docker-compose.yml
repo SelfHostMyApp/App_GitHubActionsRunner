@@ -1,0 +1,54 @@
+# Docker Compose for Puppet Master Architecture
+#
+# This deploys:
+# 1. The Puppet Master container (orchestrator)
+# 2. Pre-builds the ephemeral runner image
+#
+# Usage:
+#   1. Copy .env.example to .env and fill in your GitHub PAT
+#   2. Edit count.json with your repos and runner ceilings
+#   3. Run: docker-compose up -d
+#
+# The puppet master will:
+# - Poll GitHub API every POLL_INTERVAL seconds
+# - Spawn ephemeral runners (up to ceiling) when jobs are queued
+# - Clean up runners after they complete their single job
+
+services:
+  puppet-master:
+    container_name: gh-puppet-master
+    build:
+      context: .
+      dockerfile: Dockerfile.puppet-master
+    restart: unless-stopped
+    environment:
+      - GITHUB_PAT=${GITHUB_PAT}
+      - POLL_INTERVAL=${POLL_INTERVAL:-30}
+      - RUNNER_IMAGE=${RUNNER_IMAGE:-gh-ephemeral-runner:latest}
+      - DOCKER_NETWORK=${DOCKER_NETWORK:-github-runners}
+      - CONTAINER_CPU=${CONTAINER_CPU:-2}
+      - CONTAINER_MEMORY=${CONTAINER_MEMORY:-2g}
+    volumes:
+      # Docker socket access - this is how we spawn ephemeral runners
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Mount the config file
+      - ./count.json:/config/count.json:ro
+    networks:
+      - runner-network
+
+  # Build the ephemeral runner image (doesn't run, just ensures image exists)
+  ephemeral-runner-builder:
+    container_name: gh-ephemeral-runner-builder
+    build:
+      context: .
+      dockerfile: Dockerfile.ephemeral-runner
+    image: gh-ephemeral-runner:latest
+    # This service just builds the image, doesn't run
+    entrypoint: ["echo", "Image built successfully"]
+    profiles:
+      - build
+
+networks:
+  runner-network:
+    name: github-runners
+    driver: bridge

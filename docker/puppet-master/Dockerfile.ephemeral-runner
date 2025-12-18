@@ -1,0 +1,79 @@
+# Dockerfile.ephemeral-runner
+# Lightweight ephemeral GitHub Actions runner
+#
+# Key design decisions:
+# - Uses HOST Docker socket (NOT docker-in-docker) - much lighter
+# - Runs ONE job then exits (--ephemeral flag)
+# - No persistent state = no cache pollution
+# - Minimal footprint for fast startup
+
+FROM ubuntu:22.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG RUNNER_VERSION=2.324.0
+
+# Install required packages - minimal set
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    git \
+    jq \
+    gosu \
+    gnupg \
+    lsb-release \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Docker CLI only (we use host Docker socket, not our own daemon)
+RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends docker-ce-cli && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create runner user
+RUN useradd -m -s /bin/bash docker
+
+# Download and extract GitHub Actions runner
+WORKDIR /home/docker
+RUN curl -o actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz -L \
+    https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz && \
+    mkdir actions-runner && \
+    tar xzf actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz -C actions-runner && \
+    rm actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz && \
+    chown -R docker:docker /home/docker
+
+# Install runner dependencies
+RUN /home/docker/actions-runner/bin/installdependencies.sh
+
+# Copy entrypoint script
+COPY ephemeral-runner-entrypoint.sh /home/docker/
+RUN chmod +x /home/docker/ephemeral-runner-entrypoint.sh && \
+    chown docker:docker /home/docker/ephemeral-runner-entrypoint.sh
+
+# Create init script to handle Docker socket permissions
+RUN cat > /docker-init.sh << 'INITSCRIPT'
+#!/bin/bash
+set -e
+
+# Handle Docker socket permissions
+if [ -e /var/run/docker.sock ]; then
+    HOST_DOCKER_GID=$(stat -c "%g" /var/run/docker.sock)
+
+    # Create group with matching GID if needed
+    if ! getent group docker-host >/dev/null 2>&1; then
+        groupadd -g "$HOST_DOCKER_GID" docker-host 2>/dev/null || true
+    fi
+
+    # Add docker user to the group
+    usermod -aG "$HOST_DOCKER_GID" docker 2>/dev/null || true
+
+    # Ensure socket is accessible
+    chmod 666 /var/run/docker.sock 2>/dev/null || true
+fi
+
+# Switch to docker user and run the entrypoint
+exec gosu docker /home/docker/ephemeral-runner-entrypoint.sh
+INITSCRIPT
+RUN chmod +x /docker-init.sh
+
+ENTRYPOINT ["/docker-init.sh"]
