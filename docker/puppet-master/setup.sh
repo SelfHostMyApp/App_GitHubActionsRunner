@@ -229,8 +229,8 @@ stop() {
 
     # Also stop any orphaned ephemeral runners
     log_info "Stopping any orphaned ephemeral runners..."
-    $RUNTIME ps --filter "name=ephemeral-runner" -q 2>/dev/null | xargs -r $RUNTIME stop 2>/dev/null || true
-    $RUNTIME ps -a --filter "name=ephemeral-runner" -q 2>/dev/null | xargs -r $RUNTIME rm 2>/dev/null || true
+    $RUNTIME ps --filter "name=eph-" -q 2>/dev/null | xargs -r $RUNTIME stop 2>/dev/null || true
+    $RUNTIME ps -a --filter "name=eph-" -q 2>/dev/null | xargs -r $RUNTIME rm 2>/dev/null || true
 
     log_info "Stopped"
 }
@@ -254,13 +254,13 @@ status() {
 
     echo ""
     log_info "Active Ephemeral Runners:"
-    $RUNTIME ps --filter "name=ephemeral-runner" --format "table {{.Names}}\t{{.Status}}\t{{.RunningFor}}" 2>/dev/null || \
-        $RUNTIME ps --filter "name=ephemeral-runner"
+    $RUNTIME ps --filter "name=eph-" --format "table {{.Names}}\t{{.Status}}\t{{.RunningFor}}" 2>/dev/null || \
+        $RUNTIME ps --filter "name=eph-"
 
     echo ""
     log_info "Exited Runners (pending cleanup):"
-    $RUNTIME ps -a --filter "name=ephemeral-runner" --filter "status=exited" --format "table {{.Names}}\t{{.Status}}" 2>/dev/null || \
-        $RUNTIME ps -a --filter "name=ephemeral-runner" --filter "status=exited"
+    $RUNTIME ps -a --filter "name=eph-" --filter "status=exited" --format "table {{.Names}}\t{{.Status}}" 2>/dev/null || \
+        $RUNTIME ps -a --filter "name=eph-" --filter "status=exited"
 
     echo ""
     log_info "Config Summary:"

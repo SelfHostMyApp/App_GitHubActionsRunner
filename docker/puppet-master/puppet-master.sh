@@ -138,8 +138,10 @@ get_repo_active_runners() {
     local owner_repo="$1"
     local repo_slug
     repo_slug=$(echo "$owner_repo" | tr '/' '-' | tr '[:upper:]' '[:lower:]')
+    # Match shortened slug (first 45 chars) with eph-r- prefix
+    local short_slug="${repo_slug:0:45}"
 
-    $RUNTIME ps --filter "name=${RUNNER_PREFIX}-repo-${repo_slug}" --format "{{.Names}}" 2>/dev/null | wc -l
+    $RUNTIME ps --filter "name=eph-r-${short_slug}" --format "{{.Names}}" 2>/dev/null | wc -l
 }
 
 # Function to get active runners for an organization
@@ -147,8 +149,10 @@ get_org_active_runners() {
     local org="$1"
     local org_slug
     org_slug=$(echo "$org" | tr '[:upper:]' '[:lower:]')
+    # Match shortened slug (first 45 chars) with eph-o- prefix
+    local short_slug="${org_slug:0:45}"
 
-    $RUNTIME ps --filter "name=${RUNNER_PREFIX}-org-${org_slug}" --format "{{.Names}}" 2>/dev/null | wc -l
+    $RUNTIME ps --filter "name=eph-o-${short_slug}" --format "{{.Names}}" 2>/dev/null | wc -l
 }
 
 # Function to get a registration token for a repository
@@ -183,8 +187,11 @@ spawn_repo_runner() {
     local repo_slug
     repo_slug=$(echo "$owner_repo" | tr '/' '-' | tr '[:upper:]' '[:lower:]')
 
-    # Generate unique runner ID
-    local runner_id="${RUNNER_PREFIX}-repo-${repo_slug}-$(date +%s)-$(head -c 4 /dev/urandom | xxd -p)"
+    # Generate unique runner ID (must be <= 64 chars for GitHub)
+    # Format: eph-r-{slug (truncated to 45 chars)}-{8 char hex}
+    local short_slug="${repo_slug:0:45}"
+    local rand_hex=$(head -c 4 /dev/urandom | xxd -p)
+    local runner_id="eph-r-${short_slug}-${rand_hex}"
 
     echo "  Spawning repo runner: $runner_id"
     echo "    Target: $owner_repo"
@@ -237,8 +244,11 @@ spawn_org_runner() {
     local org_slug
     org_slug=$(echo "$org" | tr '[:upper:]' '[:lower:]')
 
-    # Generate unique runner ID
-    local runner_id="${RUNNER_PREFIX}-org-${org_slug}-$(date +%s)-$(head -c 4 /dev/urandom | xxd -p)"
+    # Generate unique runner ID (must be <= 64 chars for GitHub)
+    # Format: eph-o-{org (truncated to 45 chars)}-{8 char hex}
+    local short_slug="${org_slug:0:45}"
+    local rand_hex=$(head -c 4 /dev/urandom | xxd -p)
+    local runner_id="eph-o-${short_slug}-${rand_hex}"
 
     echo "  Spawning org runner: $runner_id"
     echo "    Target: $org (organization)"
@@ -285,7 +295,8 @@ spawn_org_runner() {
 # Function to cleanup exited runner containers
 cleanup_exited_runners() {
     local exited_containers
-    exited_containers=$($RUNTIME ps -a --filter "name=${RUNNER_PREFIX}" --filter "status=exited" --format "{{.Names}}" 2>/dev/null)
+    # Match both eph-r- (repo) and eph-o- (org) prefixes
+    exited_containers=$($RUNTIME ps -a --filter "name=eph-" --filter "status=exited" --format "{{.Names}}" 2>/dev/null)
 
     for container in $exited_containers; do
         echo "  Cleaning up exited runner: $container"
