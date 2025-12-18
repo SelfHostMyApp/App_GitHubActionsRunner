@@ -144,10 +144,10 @@ build_images() {
     log_step "Building container images..."
 
     log_info "Building ephemeral runner image..."
-    $RUNTIME build --no-cache -t gh-ephemeral-runner:latest -f Dockerfile.ephemeral-runner .
+    $RUNTIME build -t gh-ephemeral-runner:latest -f Dockerfile.ephemeral-runner .
 
     log_info "Building puppet master image..."
-    $RUNTIME build --no-cache -t gh-puppet-master:latest -f Dockerfile.puppet-master .
+    $RUNTIME build -t gh-puppet-master:latest -f Dockerfile.puppet-master .
 
     log_info "Images built successfully"
     echo ""

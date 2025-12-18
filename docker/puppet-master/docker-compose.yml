@@ -19,9 +19,7 @@
 services:
   puppet-master:
     container_name: gh-puppet-master
-    build:
-      context: .
-      dockerfile: Dockerfile.puppet-master
+    image: gh-puppet-master:latest
     restart: unless-stopped
     environment:
       - GITHUB_PAT=${GITHUB_PAT}
