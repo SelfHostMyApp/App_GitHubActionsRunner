@@ -307,3 +307,7 @@ case "${1:-help}" in
         exit 1
         ;;
 esac
+
+# Pause at end so output is visible if launched from file manager
+echo ""
+read -p "Press Enter to close..."
