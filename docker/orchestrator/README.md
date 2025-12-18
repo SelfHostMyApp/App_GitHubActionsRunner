@@ -1,14 +1,15 @@
-# Puppet Master - Ephemeral GitHub Actions Runners
+# Orchestrator - Ephemeral GitHub Actions Runners
 
-A single "puppet master" container that orchestrates ephemeral GitHub Actions runners. Each job gets a fresh container with no cache pollution.
+A single orchestrator container that manages ephemeral GitHub Actions runners. Each job gets a fresh container with no cache pollution.
 
 ## Features
 
-- **Single controller** - One puppet master manages all runners
+- **Single controller** - One orchestrator manages all runners
 - **Per-repo and per-org support** - Configure personal repos individually, share runners across orgs
 - **Customizable resources** - Set CPU and RAM limits per repo/org
 - **No cache pollution** - Each job gets a fresh container
 - **Auto-scaling** - Spawns runners on demand up to your ceiling
+- **Multi-orchestrator safe** - Multiple orchestrators on different hosts coordinate via GitHub API
 - **Docker & Podman compatible** - Works with both container runtimes
 
 ## Architecture
@@ -18,7 +19,7 @@ A single "puppet master" container that orchestrates ephemeral GitHub Actions ru
 │                      HOST MACHINE                           │
 │                                                             │
 │  ┌─────────────────────┐     ┌─────────────────────────┐   │
-│  │   Puppet Master     │────▶│  Docker/Podman Socket   │   │
+│  │    Orchestrator     │────▶│  Docker/Podman Socket   │   │
 │  │                     │     └───────────┬─────────────┘   │
 │  │  - Reads config.json│                 │                  │
 │  │  - Polls GitHub API │                 ▼                  │
@@ -38,8 +39,8 @@ A single "puppet master" container that orchestrates ephemeral GitHub Actions ru
 ## Quick Start
 
 ```bash
-# 1. Navigate to puppet-master directory
-cd docker/puppet-master
+# 1. Navigate to orchestrator directory
+cd docker/orchestrator
 
 # 2. Create configuration files
 cp .env.example .env
@@ -122,9 +123,9 @@ GitHub doesn't allow sharing runners between personal repos and organizations, w
 
 ```bash
 ./setup.sh build   # Build container images
-./setup.sh start   # Build and start puppet master
-./setup.sh stop    # Stop puppet master and cleanup runners
-./setup.sh logs    # View puppet master logs (follow mode)
+./setup.sh start   # Build and start orchestrator
+./setup.sh stop    # Stop orchestrator and cleanup runners
+./setup.sh logs    # View orchestrator logs (follow mode)
 ./setup.sh status  # Show status of all containers
 ./setup.sh help    # Show help
 ```
@@ -164,15 +165,15 @@ For organization runners, you also need:
 
 ## How It Works
 
-1. **Puppet Master** polls GitHub API every N seconds (configurable)
+1. **Orchestrator** polls GitHub API every N seconds (configurable)
 2. For each repo/org in config, it checks for queued workflow runs
-3. Compares queued jobs vs active runners vs max_count ceiling
+3. Compares queued jobs vs registered runners vs max_count ceiling
 4. Spawns new ephemeral runners if needed (up to ceiling)
 5. Each runner:
    - Registers with `--ephemeral` flag
    - Runs exactly ONE job
    - Exits automatically after job completes
-6. Puppet Master cleans up exited containers on next poll
+6. Orchestrator cleans up exited containers on next poll
 
 ## Troubleshooting
 

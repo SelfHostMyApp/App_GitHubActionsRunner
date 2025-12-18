@@ -133,7 +133,7 @@ get_org_queued_jobs() {
 }
 
 # Function to get REGISTERED runners for a repository (from GitHub API)
-# This allows multiple puppet masters to coordinate - they all see the same count
+# This allows multiple orchestrators to coordinate - they all see the same count
 get_repo_registered_runners() {
     local owner_repo="$1"
     local response
@@ -336,7 +336,7 @@ process_repos() {
 
         # Only check registered runners if there are queued jobs (reduces API calls)
         if [ "$queued_jobs" -gt 0 ]; then
-            # Use GitHub API to get runner count (works across multiple puppet masters)
+            # Use GitHub API to get runner count (works across multiple orchestrators)
             registered_runners=$(get_repo_registered_runners "$owner_repo")
             echo "[REPO: $owner_repo] Queued: $queued_jobs, Registered: $registered_runners, Max: $max_count"
         else
@@ -383,7 +383,7 @@ process_orgs() {
 
         # Only check registered runners if there are queued jobs (reduces API calls)
         if [ "$queued_jobs" -gt 0 ]; then
-            # Use GitHub API to get runner count (works across multiple puppet masters)
+            # Use GitHub API to get runner count (works across multiple orchestrators)
             registered_runners=$(get_org_registered_runners "$org")
             echo "[ORG: $org] Queued: $queued_jobs, Registered: $registered_runners, Max: $max_count"
         else
