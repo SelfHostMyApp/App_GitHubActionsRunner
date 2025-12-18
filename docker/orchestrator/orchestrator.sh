@@ -132,9 +132,9 @@ get_org_queued_jobs() {
     echo "$total"
 }
 
-# Function to get REGISTERED runners for a repository (from GitHub API)
+# Function to get online runner count for a repository (from GitHub API)
 # This allows multiple orchestrators to coordinate - they all see the same count
-get_repo_registered_runners() {
+get_repo_runner_count() {
     local owner_repo="$1"
     local response
 
@@ -148,12 +148,12 @@ get_repo_registered_runners() {
         return
     fi
 
-    # Count online runners only (busy or idle, not offline)
+    # Count online runners (busy or idle - offline don't count)
     echo "$response" | jq -r '[.runners[] | select(.status == "online")] | length // 0'
 }
 
-# Function to get REGISTERED runners for an organization (from GitHub API)
-get_org_registered_runners() {
+# Function to get online runner count for an organization (from GitHub API)
+get_org_runner_count() {
     local org="$1"
     local response
 
@@ -167,7 +167,7 @@ get_org_registered_runners() {
         return
     fi
 
-    # Count online runners only
+    # Count online runners (busy or idle - offline don't count)
     echo "$response" | jq -r '[.runners[] | select(.status == "online")] | length // 0'
 }
 
@@ -331,30 +331,31 @@ process_repos() {
         cpus=$(jq -r ".repos[\"${owner_repo}\"].cpus // \"${DEFAULT_CPUS}\"" "$CONFIG_FILE")
         ram=$(jq -r ".repos[\"${owner_repo}\"].ram // \"${DEFAULT_RAM}\"" "$CONFIG_FILE")
 
-        local queued_jobs registered_runners
+        local queued_jobs
         queued_jobs=$(get_repo_queued_jobs "$owner_repo")
 
         # Only check registered runners if there are queued jobs (reduces API calls)
         if [ "$queued_jobs" -gt 0 ]; then
             # Use GitHub API to get runner count (works across multiple orchestrators)
-            registered_runners=$(get_repo_registered_runners "$owner_repo")
-            echo "[REPO: $owner_repo] Queued: $queued_jobs, Registered: $registered_runners, Max: $max_count"
+            local total_runners
+            total_runners=$(get_repo_runner_count "$owner_repo")
+            echo "[REPO: $owner_repo] Queued: $queued_jobs, Runners: $total_runners, Max: $max_count"
         else
             echo "[REPO: $owner_repo] Queued: 0 (idle)"
             continue
         fi
 
         # Calculate how many runners we need to spawn
-        if [ "$queued_jobs" -gt "$registered_runners" ] && [ "$registered_runners" -lt "$max_count" ]; then
-            local runners_needed=$((queued_jobs - registered_runners))
-            local runners_available=$((max_count - registered_runners))
+        # Each queued job needs a runner (ephemeral = one job per runner)
+        if [ "$total_runners" -lt "$max_count" ]; then
+            local runners_available=$((max_count - total_runners))
             local runners_to_spawn
 
-            # Don't exceed the ceiling
-            if [ "$runners_needed" -gt "$runners_available" ]; then
+            # Spawn enough for queued jobs, but don't exceed the ceiling
+            if [ "$queued_jobs" -gt "$runners_available" ]; then
                 runners_to_spawn=$runners_available
             else
-                runners_to_spawn=$runners_needed
+                runners_to_spawn=$queued_jobs
             fi
 
             echo "  Spawning $runners_to_spawn runner(s)..."
@@ -378,30 +379,31 @@ process_orgs() {
         cpus=$(jq -r ".orgs[\"${org}\"].cpus // \"${DEFAULT_CPUS}\"" "$CONFIG_FILE")
         ram=$(jq -r ".orgs[\"${org}\"].ram // \"${DEFAULT_RAM}\"" "$CONFIG_FILE")
 
-        local queued_jobs registered_runners
+        local queued_jobs
         queued_jobs=$(get_org_queued_jobs "$org")
 
         # Only check registered runners if there are queued jobs (reduces API calls)
         if [ "$queued_jobs" -gt 0 ]; then
             # Use GitHub API to get runner count (works across multiple orchestrators)
-            registered_runners=$(get_org_registered_runners "$org")
-            echo "[ORG: $org] Queued: $queued_jobs, Registered: $registered_runners, Max: $max_count"
+            local total_runners
+            total_runners=$(get_org_runner_count "$org")
+            echo "[ORG: $org] Queued: $queued_jobs, Runners: $total_runners, Max: $max_count"
         else
             echo "[ORG: $org] Queued: 0 (idle)"
             continue
         fi
 
         # Calculate how many runners we need to spawn
-        if [ "$queued_jobs" -gt "$registered_runners" ] && [ "$registered_runners" -lt "$max_count" ]; then
-            local runners_needed=$((queued_jobs - registered_runners))
-            local runners_available=$((max_count - registered_runners))
+        # Each queued job needs a runner (ephemeral = one job per runner)
+        if [ "$total_runners" -lt "$max_count" ]; then
+            local runners_available=$((max_count - total_runners))
             local runners_to_spawn
 
-            # Don't exceed the ceiling
-            if [ "$runners_needed" -gt "$runners_available" ]; then
+            # Spawn enough for queued jobs, but don't exceed the ceiling
+            if [ "$queued_jobs" -gt "$runners_available" ]; then
                 runners_to_spawn=$runners_available
             else
-                runners_to_spawn=$runners_needed
+                runners_to_spawn=$queued_jobs
             fi
 
             echo "  Spawning $runners_to_spawn runner(s)..."
