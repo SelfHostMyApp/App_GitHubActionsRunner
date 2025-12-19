@@ -14,7 +14,8 @@
 # - Docker and Podman runtimes
 # - Multiple orchestrators (uses GitHub API for runner count, not local containers)
 
-set -e
+# Don't use set -e - we handle errors explicitly to avoid crashes
+# set -e
 
 # Configuration
 CONFIG_FILE="${CONFIG_FILE:-/config/config.json}"
@@ -96,6 +97,7 @@ echo "==========================================="
 echo ""
 
 # Function to get queued jobs for a repository
+# Returns: number of queued jobs, or -1 on API error
 get_repo_queued_jobs() {
     local owner_repo="$1"
     local response
@@ -106,7 +108,15 @@ get_repo_queued_jobs() {
         "https://api.github.com/repos/${owner_repo}/actions/runs?status=queued" 2>/dev/null)
 
     if [ $? -ne 0 ]; then
-        echo "0"
+        echo "-1"
+        return
+    fi
+
+    # Check for API errors (rate limit, auth failure, etc.)
+    local error_msg
+    error_msg=$(echo "$response" | jq -r '.message // empty' 2>/dev/null)
+    if [ -n "$error_msg" ]; then
+        echo "-1"
         return
     fi
 
@@ -114,10 +124,10 @@ get_repo_queued_jobs() {
 }
 
 # Function to get queued jobs for an organization (across all repos)
+# Returns: number of queued jobs, or -1 on API error
 get_org_queued_jobs() {
     local org="$1"
     local response
-    local total=0
 
     # Get queued workflow runs across the org
     response=$(curl -s -H "Authorization: Bearer $GITHUB_PAT" \
@@ -125,11 +135,20 @@ get_org_queued_jobs() {
         -H "X-GitHub-Api-Version: 2022-11-28" \
         "https://api.github.com/orgs/${org}/actions/runs?status=queued" 2>/dev/null)
 
-    if [ $? -eq 0 ]; then
-        total=$(echo "$response" | jq -r '.total_count // 0')
+    if [ $? -ne 0 ]; then
+        echo "-1"
+        return
     fi
 
-    echo "$total"
+    # Check for API errors (rate limit, auth failure, etc.)
+    local error_msg
+    error_msg=$(echo "$response" | jq -r '.message // empty' 2>/dev/null)
+    if [ -n "$error_msg" ]; then
+        echo "-1"
+        return
+    fi
+
+    echo "$response" | jq -r '.total_count // 0'
 }
 
 # Function to get online runner count for a repository (from GitHub API)
@@ -334,6 +353,12 @@ process_repos() {
         local queued_jobs
         queued_jobs=$(get_repo_queued_jobs "$owner_repo")
 
+        # Check for API error
+        if [ "$queued_jobs" -eq -1 ]; then
+            echo "[REPO: $owner_repo] API ERROR - skipping (rate limit or auth failure?)"
+            continue
+        fi
+
         # Only check registered runners if there are queued jobs (reduces API calls)
         if [ "$queued_jobs" -gt 0 ]; then
             # Use GitHub API to get runner count (works across multiple orchestrators)
@@ -360,7 +385,15 @@ process_repos() {
 
             echo "  Spawning $runners_to_spawn runner(s)..."
             for i in $(seq 1 $runners_to_spawn); do
-                spawn_repo_runner "$owner_repo" "$cpus" "$ram"
+                # Re-check runner count before each spawn (another orchestrator may have spawned)
+                local current_runners
+                current_runners=$(get_repo_runner_count "$owner_repo")
+                if [ "$current_runners" -ge "$max_count" ]; then
+                    echo "  Ceiling reached ($current_runners/$max_count), stopping spawns"
+                    break
+                fi
+
+                spawn_repo_runner "$owner_repo" "$cpus" "$ram" || echo "  (continuing despite error)"
                 # Small delay between spawns to avoid rate limiting
                 sleep 2
             done
@@ -381,6 +414,12 @@ process_orgs() {
 
         local queued_jobs
         queued_jobs=$(get_org_queued_jobs "$org")
+
+        # Check for API error
+        if [ "$queued_jobs" -eq -1 ]; then
+            echo "[ORG: $org] API ERROR - skipping (rate limit or auth failure?)"
+            continue
+        fi
 
         # Only check registered runners if there are queued jobs (reduces API calls)
         if [ "$queued_jobs" -gt 0 ]; then
@@ -408,7 +447,15 @@ process_orgs() {
 
             echo "  Spawning $runners_to_spawn runner(s)..."
             for i in $(seq 1 $runners_to_spawn); do
-                spawn_org_runner "$org" "$cpus" "$ram"
+                # Re-check runner count before each spawn (another orchestrator may have spawned)
+                local current_runners
+                current_runners=$(get_org_runner_count "$org")
+                if [ "$current_runners" -ge "$max_count" ]; then
+                    echo "  Ceiling reached ($current_runners/$max_count), stopping spawns"
+                    break
+                fi
+
+                spawn_org_runner "$org" "$cpus" "$ram" || echo "  (continuing despite error)"
                 # Small delay between spawns to avoid rate limiting
                 sleep 2
             done
