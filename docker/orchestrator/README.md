@@ -144,24 +144,22 @@ Then in your workflow, specify which runner type you need:
 ```yaml
 jobs:
   lint:
-    runs-on: [self-hosted, singlethreaded]  # Uses 1 CPU runner
+    runs-on: [self-hosted]                   # Uses singlethreaded (default pool)
     steps:
       - run: npm run lint
 
   test:
-    runs-on: [self-hosted, multithreaded]   # Uses 8 CPU runner
+    runs-on: [self-hosted, multithreaded]   # Uses 8 CPU runner (explicit)
     steps:
       - run: npm test
-
-  build:
-    runs-on: [self-hosted]                   # Uses either pool
-    steps:
-      - run: npm run build
 ```
 
-- Jobs with `runs-on: [self-hosted, singlethreaded]` only run on singlethreaded runners
-- Jobs with `runs-on: [self-hosted, multithreaded]` only run on multithreaded runners
-- Jobs with just `runs-on: [self-hosted]` can run on either type
+**Default behavior:**
+- `singlethreaded` runners have NO extra label - they're the default pool
+- Jobs with `runs-on: [self-hosted]` go to singlethreaded runners
+- Jobs with `runs-on: [self-hosted, multithreaded]` go to multithreaded runners only
+
+This means jobs that don't specify a label automatically use the lighter singlethreaded pool, while CPU-intensive jobs must explicitly request `multithreaded`.
 
 ### Global Thread Limit
 
@@ -261,8 +259,8 @@ Common issues:
 ### Jobs not matching runners
 
 If jobs stay queued but runners are available, check the labels:
-- Workflow `runs-on` must match runner labels exactly
-- `runs-on: [self-hosted, singlethreaded]` needs a runner with `singlethreaded` label
+- `runs-on: [self-hosted]` goes to singlethreaded runners (default pool, no extra label)
+- `runs-on: [self-hosted, multithreaded]` requires a runner with `multithreaded` label
 - Check runner labels in GitHub Settings → Actions → Runners
 
 ### Permission errors with container socket

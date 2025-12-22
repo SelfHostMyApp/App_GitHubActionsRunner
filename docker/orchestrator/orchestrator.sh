@@ -229,6 +229,7 @@ get_org_queued_jobs() {
 
 # Function to get online runner count for a repository (from GitHub API)
 # Optionally filter by label
+# Special case: "singlethreaded" counts runners WITHOUT "multithreaded" label
 get_repo_runner_count() {
     local owner_repo="$1"
     local filter_label="$2"
@@ -245,9 +246,14 @@ get_repo_runner_count() {
     fi
 
     # Count online runners, optionally filtering by label
-    if [ -n "$filter_label" ]; then
-        echo "$response" | jq -r --arg label "$filter_label" \
-            '[.runners[] | select(.status == "online") | select(.labels[].name == $label)] | length // 0'
+    if [ "$filter_label" = "singlethreaded" ]; then
+        # singlethreaded = runners WITHOUT the "multithreaded" label (default pool)
+        echo "$response" | jq -r \
+            '[.runners[] | select(.status == "online") | select(all(.labels[]; .name != "multithreaded"))] | length // 0'
+    elif [ -n "$filter_label" ]; then
+        # Other labels (like multithreaded) = runners WITH that label
+        echo "$response" | jq -r --arg lbl "$filter_label" \
+            '[.runners[] | select(.status == "online") | select(any(.labels[]; .name == $lbl))] | length // 0'
     else
         echo "$response" | jq -r '[.runners[] | select(.status == "online")] | length // 0'
     fi
@@ -255,6 +261,7 @@ get_repo_runner_count() {
 
 # Function to get online runner count for an organization (from GitHub API)
 # Optionally filter by label
+# Special case: "singlethreaded" counts runners WITHOUT "multithreaded" label
 get_org_runner_count() {
     local org="$1"
     local filter_label="$2"
@@ -271,9 +278,14 @@ get_org_runner_count() {
     fi
 
     # Count online runners, optionally filtering by label
-    if [ -n "$filter_label" ]; then
-        echo "$response" | jq -r --arg label "$filter_label" \
-            '[.runners[] | select(.status == "online") | select(.labels[].name == $label)] | length // 0'
+    if [ "$filter_label" = "singlethreaded" ]; then
+        # singlethreaded = runners WITHOUT the "multithreaded" label (default pool)
+        echo "$response" | jq -r \
+            '[.runners[] | select(.status == "online") | select(all(.labels[]; .name != "multithreaded"))] | length // 0'
+    elif [ -n "$filter_label" ]; then
+        # Other labels (like multithreaded) = runners WITH that label
+        echo "$response" | jq -r --arg lbl "$filter_label" \
+            '[.runners[] | select(.status == "online") | select(any(.labels[]; .name == $lbl))] | length // 0'
     else
         echo "$response" | jq -r '[.runners[] | select(.status == "online")] | length // 0'
     fi
@@ -330,11 +342,15 @@ spawn_repo_runner() {
     echo "    Target: $owner_repo"
     echo "    Resources: ${cpus} CPUs, ${ram} RAM"
 
-    # Build labels - always include self-hosted, add profile label if specified
+    # Build labels - always include self-hosted
+    # singlethreaded runners get NO extra label (so runs-on: self-hosted jobs go to them)
+    # other labels (like multithreaded) are added explicitly
     local runner_labels="${repo}-runner,ephemeral"
-    if [ -n "$label" ]; then
+    if [ -n "$label" ] && [ "$label" != "singlethreaded" ]; then
         runner_labels="${runner_labels},${label}"
         echo "    Labels: self-hosted, ${label}"
+    else
+        echo "    Labels: self-hosted (default pool)"
     fi
 
     # Get registration token
@@ -403,11 +419,15 @@ spawn_org_runner() {
     echo "    Target: $org (organization)"
     echo "    Resources: ${cpus} CPUs, ${ram} RAM"
 
-    # Build labels - always include self-hosted, add profile label if specified
+    # Build labels - always include self-hosted
+    # singlethreaded runners get NO extra label (so runs-on: self-hosted jobs go to them)
+    # other labels (like multithreaded) are added explicitly
     local runner_labels="${org}-runner,ephemeral,org-runner"
-    if [ -n "$label" ]; then
+    if [ -n "$label" ] && [ "$label" != "singlethreaded" ]; then
         runner_labels="${runner_labels},${label}"
         echo "    Labels: self-hosted, ${label}"
+    else
+        echo "    Labels: self-hosted (default pool)"
     fi
 
     # Get registration token
@@ -633,7 +653,6 @@ while true; do
 
     # Show current thread usage if max_threads is set
     if [ "$MAX_THREADS" -gt 0 ]; then
-        local current_threads
         current_threads=$(get_current_thread_usage)
         echo "Thread usage: $current_threads / $MAX_THREADS"
     fi
