@@ -7,6 +7,8 @@ A single orchestrator container that manages ephemeral GitHub Actions runners. E
 - **Single controller** - One orchestrator manages all runners
 - **Per-repo and per-org support** - Configure personal repos individually, share runners across orgs
 - **Customizable resources** - Set CPU and RAM limits per repo/org
+- **Label-based runner profiles** - Different resource pools for different job types (e.g., singlethreaded vs multithreaded)
+- **Global thread limit** - Prevent system overload with max_threads setting
 - **No cache pollution** - Each job gets a fresh container
 - **Auto-scaling** - Spawns runners on demand up to your ceiling
 - **Multi-orchestrator safe** - Multiple orchestrators on different hosts coordinate via GitHub API
@@ -77,25 +79,36 @@ CONTAINER_NETWORK=github-runners        # Network name
 
 ```json
 {
+    "max_threads": 16,
     "defaults": {
         "cpus": 2,
         "ram": "2g"
     },
     "repos": {
-        "YourUser/RepoA": {
+        "YourUser/RepoA:singlethreaded": {
             "max_count": 4,
-            "cpus": 4,
-            "ram": "4g"
+            "cpus": 1,
+            "ram": "1g"
+        },
+        "YourUser/RepoA:multithreaded": {
+            "max_count": 2,
+            "cpus": 8,
+            "ram": "8g"
         },
         "YourUser/RepoB": {
             "max_count": 1
         }
     },
     "orgs": {
-        "YourOrg": {
-            "max_count": 5,
-            "cpus": 2,
-            "ram": "2g"
+        "YourOrg:singlethreaded": {
+            "max_count": 4,
+            "cpus": 1,
+            "ram": "1g"
+        },
+        "YourOrg:multithreaded": {
+            "max_count": 2,
+            "cpus": 4,
+            "ram": "4g"
         }
     }
 }
@@ -103,6 +116,7 @@ CONTAINER_NETWORK=github-runners        # Network name
 
 | Field | Description |
 |-------|-------------|
+| `max_threads` | Global CPU limit across all runners (0 = unlimited) |
 | `defaults.cpus` | Default CPU limit for runners |
 | `defaults.ram` | Default memory limit for runners |
 | `repos.<owner/repo>.max_count` | Maximum concurrent runners for this repo |
@@ -111,6 +125,61 @@ CONTAINER_NETWORK=github-runners        # Network name
 | `orgs.<org>.max_count` | Maximum concurrent runners for this org |
 | `orgs.<org>.cpus` | CPU limit for org runners |
 | `orgs.<org>.ram` | Memory limit for org runners |
+
+### Label-Based Runner Profiles
+
+You can create different runner pools with different resources by adding a label suffix to the config key:
+
+```json
+{
+    "repos": {
+        "User/Repo:singlethreaded": { "max_count": 4, "cpus": 1, "ram": "1g" },
+        "User/Repo:multithreaded": { "max_count": 2, "cpus": 8, "ram": "8g" }
+    }
+}
+```
+
+Then in your workflow, specify which runner type you need:
+
+```yaml
+jobs:
+  lint:
+    runs-on: [self-hosted, singlethreaded]  # Uses 1 CPU runner
+    steps:
+      - run: npm run lint
+
+  test:
+    runs-on: [self-hosted, multithreaded]   # Uses 8 CPU runner
+    steps:
+      - run: npm test
+
+  build:
+    runs-on: [self-hosted]                   # Uses either pool
+    steps:
+      - run: npm run build
+```
+
+- Jobs with `runs-on: [self-hosted, singlethreaded]` only run on singlethreaded runners
+- Jobs with `runs-on: [self-hosted, multithreaded]` only run on multithreaded runners
+- Jobs with just `runs-on: [self-hosted]` can run on either type
+
+### Global Thread Limit
+
+The `max_threads` setting prevents system overload by limiting total CPU allocation across all runners:
+
+```json
+{
+    "max_threads": 16,
+    ...
+}
+```
+
+If spawning a new runner would exceed this limit, it will be skipped with a message:
+```
+SKIPPED: Global thread limit reached (14/16 threads in use)
+```
+
+Set to `0` for unlimited (not recommended for shared systems).
 
 ### Repos vs Orgs
 
@@ -168,12 +237,13 @@ For organization runners, you also need:
 1. **Orchestrator** polls GitHub API every N seconds (configurable)
 2. For each repo/org in config, it checks for queued workflow runs
 3. Compares queued jobs vs registered runners vs max_count ceiling
-4. Spawns new ephemeral runners if needed (up to ceiling)
-5. Each runner:
-   - Registers with `--ephemeral` flag
+4. Checks global thread limit before spawning
+5. Spawns new ephemeral runners if needed (up to ceiling)
+6. Each runner:
+   - Registers with `--ephemeral` flag and configured labels
    - Runs exactly ONE job
    - Exits automatically after job completes
-6. Orchestrator cleans up exited containers on next poll
+7. Orchestrator cleans up exited containers on next poll
 
 ## Troubleshooting
 
@@ -185,7 +255,15 @@ Common issues:
 - Invalid GitHub PAT (check permissions)
 - Repo/org not in config.json
 - Already at max_count ceiling
+- Global max_threads limit reached
 - API rate limiting (increase POLL_INTERVAL)
+
+### Jobs not matching runners
+
+If jobs stay queued but runners are available, check the labels:
+- Workflow `runs-on` must match runner labels exactly
+- `runs-on: [self-hosted, singlethreaded]` needs a runner with `singlethreaded` label
+- Check runner labels in GitHub Settings → Actions → Runners
 
 ### Permission errors with container socket
 

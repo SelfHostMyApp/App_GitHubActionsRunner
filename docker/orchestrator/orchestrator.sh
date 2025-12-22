@@ -11,6 +11,8 @@
 # - Repository-level runners (for personal repos)
 # - Organization-level runners (shared across org repos)
 # - Per-entry resource limits (cpus, ram)
+# - Label-based runner profiles (e.g., :singlethreaded, :multithreaded)
+# - Global max_threads limit to prevent system overload
 # - Docker and Podman runtimes
 # - Multiple orchestrators (uses GitHub API for runner count, not local containers)
 
@@ -91,10 +93,84 @@ get_default() {
 DEFAULT_CPUS=$(get_default "cpus" "2")
 DEFAULT_RAM=$(get_default "ram" "2g")
 
+# Read global max_threads (0 = unlimited)
+MAX_THREADS=$(jq -r '.max_threads // 0' "$CONFIG_FILE")
+
 echo "Default resources: ${DEFAULT_CPUS} CPUs, ${DEFAULT_RAM} RAM"
+if [ "$MAX_THREADS" -gt 0 ]; then
+    echo "Global thread limit: ${MAX_THREADS}"
+else
+    echo "Global thread limit: unlimited"
+fi
 echo "Multi-orchestrator safe: Yes (uses GitHub API for runner counts)"
 echo "==========================================="
 echo ""
+
+# Function to get current thread usage from running containers
+get_current_thread_usage() {
+    local total=0
+    local cpus_list
+
+    # Get CPU allocation for all running ephemeral runner containers
+    cpus_list=$($RUNTIME ps --filter "name=eph-" --format "{{.Names}}" 2>/dev/null)
+
+    for container in $cpus_list; do
+        # Get the CPU limit for this container
+        local container_cpus
+        container_cpus=$($RUNTIME inspect "$container" --format '{{.HostConfig.NanoCpus}}' 2>/dev/null)
+        if [ -n "$container_cpus" ] && [ "$container_cpus" != "0" ]; then
+            # NanoCpus is in billionths of a CPU, convert to CPUs
+            local cpus=$((container_cpus / 1000000000))
+            total=$((total + cpus))
+        else
+            # If no limit set, try to get from CpuQuota/CpuPeriod
+            local quota period
+            quota=$($RUNTIME inspect "$container" --format '{{.HostConfig.CpuQuota}}' 2>/dev/null)
+            period=$($RUNTIME inspect "$container" --format '{{.HostConfig.CpuPeriod}}' 2>/dev/null)
+            if [ -n "$quota" ] && [ "$quota" != "0" ] && [ -n "$period" ] && [ "$period" != "0" ]; then
+                local cpus=$((quota / period))
+                total=$((total + cpus))
+            fi
+        fi
+    done
+
+    echo "$total"
+}
+
+# Function to check if we can spawn a runner with given CPUs
+can_spawn_with_cpus() {
+    local cpus="$1"
+
+    # If max_threads is 0 (unlimited), always allow
+    if [ "$MAX_THREADS" -eq 0 ]; then
+        return 0
+    fi
+
+    local current_usage
+    current_usage=$(get_current_thread_usage)
+    local new_usage=$((current_usage + cpus))
+
+    if [ "$new_usage" -le "$MAX_THREADS" ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Function to parse config key - extracts repo/org name and label
+# Input: "User/Repo:label" or "User/Repo"
+# Sets: PARSED_NAME and PARSED_LABEL
+parse_config_key() {
+    local key="$1"
+
+    if [[ "$key" == *":"* ]]; then
+        PARSED_NAME="${key%%:*}"
+        PARSED_LABEL="${key##*:}"
+    else
+        PARSED_NAME="$key"
+        PARSED_LABEL=""
+    fi
+}
 
 # Function to get queued jobs for a repository
 # Returns: number of queued jobs, or -1 on API error
@@ -152,9 +228,10 @@ get_org_queued_jobs() {
 }
 
 # Function to get online runner count for a repository (from GitHub API)
-# This allows multiple orchestrators to coordinate - they all see the same count
+# Optionally filter by label
 get_repo_runner_count() {
     local owner_repo="$1"
+    local filter_label="$2"
     local response
 
     response=$(curl -s -H "Authorization: Bearer $GITHUB_PAT" \
@@ -167,13 +244,20 @@ get_repo_runner_count() {
         return
     fi
 
-    # Count online runners (busy or idle - offline don't count)
-    echo "$response" | jq -r '[.runners[] | select(.status == "online")] | length // 0'
+    # Count online runners, optionally filtering by label
+    if [ -n "$filter_label" ]; then
+        echo "$response" | jq -r --arg label "$filter_label" \
+            '[.runners[] | select(.status == "online") | select(.labels[].name == $label)] | length // 0'
+    else
+        echo "$response" | jq -r '[.runners[] | select(.status == "online")] | length // 0'
+    fi
 }
 
 # Function to get online runner count for an organization (from GitHub API)
+# Optionally filter by label
 get_org_runner_count() {
     local org="$1"
+    local filter_label="$2"
     local response
 
     response=$(curl -s -H "Authorization: Bearer $GITHUB_PAT" \
@@ -186,8 +270,13 @@ get_org_runner_count() {
         return
     fi
 
-    # Count online runners (busy or idle - offline don't count)
-    echo "$response" | jq -r '[.runners[] | select(.status == "online")] | length // 0'
+    # Count online runners, optionally filtering by label
+    if [ -n "$filter_label" ]; then
+        echo "$response" | jq -r --arg label "$filter_label" \
+            '[.runners[] | select(.status == "online") | select(.labels[].name == $label)] | length // 0'
+    else
+        echo "$response" | jq -r '[.runners[] | select(.status == "online")] | length // 0'
+    fi
 }
 
 # Function to get a registration token for a repository
@@ -217,10 +306,19 @@ spawn_repo_runner() {
     local owner_repo="$1"
     local cpus="$2"
     local ram="$3"
+    local label="$4"
     local owner="${owner_repo%%/*}"
     local repo="${owner_repo##*/}"
     local repo_slug
     repo_slug=$(echo "$owner_repo" | tr '/' '-' | tr '[:upper:]' '[:lower:]')
+
+    # Check global thread limit
+    if ! can_spawn_with_cpus "$cpus"; then
+        local current
+        current=$(get_current_thread_usage)
+        echo "  SKIPPED: Global thread limit reached ($current/$MAX_THREADS threads in use)"
+        return 1
+    fi
 
     # Generate unique runner ID (must be <= 64 chars for GitHub)
     # Format: eph-r-{slug (truncated to 45 chars)}-{8 char hex}
@@ -231,6 +329,13 @@ spawn_repo_runner() {
     echo "  Spawning repo runner: $runner_id"
     echo "    Target: $owner_repo"
     echo "    Resources: ${cpus} CPUs, ${ram} RAM"
+
+    # Build labels - always include self-hosted, add profile label if specified
+    local runner_labels="${repo}-runner,ephemeral"
+    if [ -n "$label" ]; then
+        runner_labels="${runner_labels},${label}"
+        echo "    Labels: self-hosted, ${label}"
+    fi
 
     # Get registration token
     local reg_token
@@ -259,7 +364,7 @@ spawn_repo_runner() {
         -e GITHUB_ACTIONS_REPOSITORIES="$repo" \
         -e GITHUB_ACTIONS_RUNNER_REGISTRATION_TOKEN="$reg_token" \
         -e RUNNER_NAME="$runner_id" \
-        -e RUNNER_LABELS="${repo}-runner,ephemeral" \
+        -e RUNNER_LABELS="$runner_labels" \
         "$RUNNER_IMAGE" >/dev/null 2>&1
 
     if [ $? -eq 0 ]; then
@@ -276,8 +381,17 @@ spawn_org_runner() {
     local org="$1"
     local cpus="$2"
     local ram="$3"
+    local label="$4"
     local org_slug
     org_slug=$(echo "$org" | tr '[:upper:]' '[:lower:]')
+
+    # Check global thread limit
+    if ! can_spawn_with_cpus "$cpus"; then
+        local current
+        current=$(get_current_thread_usage)
+        echo "  SKIPPED: Global thread limit reached ($current/$MAX_THREADS threads in use)"
+        return 1
+    fi
 
     # Generate unique runner ID (must be <= 64 chars for GitHub)
     # Format: eph-o-{org (truncated to 45 chars)}-{8 char hex}
@@ -288,6 +402,13 @@ spawn_org_runner() {
     echo "  Spawning org runner: $runner_id"
     echo "    Target: $org (organization)"
     echo "    Resources: ${cpus} CPUs, ${ram} RAM"
+
+    # Build labels - always include self-hosted, add profile label if specified
+    local runner_labels="${org}-runner,ephemeral,org-runner"
+    if [ -n "$label" ]; then
+        runner_labels="${runner_labels},${label}"
+        echo "    Labels: self-hosted, ${label}"
+    fi
 
     # Get registration token
     local reg_token
@@ -315,7 +436,7 @@ spawn_org_runner() {
         -e GITHUB_ACTIONS_ORGANIZATION_NAME="$org" \
         -e GITHUB_ACTIONS_RUNNER_REGISTRATION_TOKEN="$reg_token" \
         -e RUNNER_NAME="$runner_id" \
-        -e RUNNER_LABELS="${org}-runner,ephemeral,org-runner" \
+        -e RUNNER_LABELS="$runner_labels" \
         "$RUNNER_IMAGE" >/dev/null 2>&1
 
     if [ $? -eq 0 ]; then
@@ -344,29 +465,44 @@ process_repos() {
     local repos
     repos=$(jq -r '.repos // {} | keys[]' "$CONFIG_FILE" 2>/dev/null)
 
-    for owner_repo in $repos; do
+    for config_key in $repos; do
+        # Parse the config key to extract repo name and optional label
+        parse_config_key "$config_key"
+        local owner_repo="$PARSED_NAME"
+        local label="$PARSED_LABEL"
+
         local max_count cpus ram
-        max_count=$(jq -r ".repos[\"${owner_repo}\"].max_count // 1" "$CONFIG_FILE")
-        cpus=$(jq -r ".repos[\"${owner_repo}\"].cpus // \"${DEFAULT_CPUS}\"" "$CONFIG_FILE")
-        ram=$(jq -r ".repos[\"${owner_repo}\"].ram // \"${DEFAULT_RAM}\"" "$CONFIG_FILE")
+        max_count=$(jq -r ".repos[\"${config_key}\"].max_count // 1" "$CONFIG_FILE")
+        cpus=$(jq -r ".repos[\"${config_key}\"].cpus // \"${DEFAULT_CPUS}\"" "$CONFIG_FILE")
+        ram=$(jq -r ".repos[\"${config_key}\"].ram // \"${DEFAULT_RAM}\"" "$CONFIG_FILE")
 
         local queued_jobs
         queued_jobs=$(get_repo_queued_jobs "$owner_repo")
 
         # Check for API error
         if [ "$queued_jobs" -eq -1 ]; then
-            echo "[REPO: $owner_repo] API ERROR - skipping (rate limit or auth failure?)"
+            echo "[REPO: $config_key] API ERROR - skipping (rate limit or auth failure?)"
             continue
         fi
 
         # Only check registered runners if there are queued jobs (reduces API calls)
         if [ "$queued_jobs" -gt 0 ]; then
             # Use GitHub API to get runner count (works across multiple orchestrators)
+            # Filter by label if one is specified
             local total_runners
-            total_runners=$(get_repo_runner_count "$owner_repo")
-            echo "[REPO: $owner_repo] Queued: $queued_jobs, Runners: $total_runners, Max: $max_count"
+            total_runners=$(get_repo_runner_count "$owner_repo" "$label")
+
+            if [ -n "$label" ]; then
+                echo "[REPO: $owner_repo:$label] Queued: $queued_jobs, Runners: $total_runners, Max: $max_count"
+            else
+                echo "[REPO: $owner_repo] Queued: $queued_jobs, Runners: $total_runners, Max: $max_count"
+            fi
         else
-            echo "[REPO: $owner_repo] Queued: 0 (idle)"
+            if [ -n "$label" ]; then
+                echo "[REPO: $owner_repo:$label] Queued: 0 (idle)"
+            else
+                echo "[REPO: $owner_repo] Queued: 0 (idle)"
+            fi
             continue
         fi
 
@@ -387,13 +523,13 @@ process_repos() {
             for i in $(seq 1 $runners_to_spawn); do
                 # Re-check runner count before each spawn (another orchestrator may have spawned)
                 local current_runners
-                current_runners=$(get_repo_runner_count "$owner_repo")
+                current_runners=$(get_repo_runner_count "$owner_repo" "$label")
                 if [ "$current_runners" -ge "$max_count" ]; then
                     echo "  Ceiling reached ($current_runners/$max_count), stopping spawns"
                     break
                 fi
 
-                spawn_repo_runner "$owner_repo" "$cpus" "$ram" || echo "  (continuing despite error)"
+                spawn_repo_runner "$owner_repo" "$cpus" "$ram" "$label" || echo "  (continuing despite error)"
                 # Small delay between spawns to avoid rate limiting
                 sleep 2
             done
@@ -406,29 +542,44 @@ process_orgs() {
     local orgs
     orgs=$(jq -r '.orgs // {} | keys[]' "$CONFIG_FILE" 2>/dev/null)
 
-    for org in $orgs; do
+    for config_key in $orgs; do
+        # Parse the config key to extract org name and optional label
+        parse_config_key "$config_key"
+        local org="$PARSED_NAME"
+        local label="$PARSED_LABEL"
+
         local max_count cpus ram
-        max_count=$(jq -r ".orgs[\"${org}\"].max_count // 1" "$CONFIG_FILE")
-        cpus=$(jq -r ".orgs[\"${org}\"].cpus // \"${DEFAULT_CPUS}\"" "$CONFIG_FILE")
-        ram=$(jq -r ".orgs[\"${org}\"].ram // \"${DEFAULT_RAM}\"" "$CONFIG_FILE")
+        max_count=$(jq -r ".orgs[\"${config_key}\"].max_count // 1" "$CONFIG_FILE")
+        cpus=$(jq -r ".orgs[\"${config_key}\"].cpus // \"${DEFAULT_CPUS}\"" "$CONFIG_FILE")
+        ram=$(jq -r ".orgs[\"${config_key}\"].ram // \"${DEFAULT_RAM}\"" "$CONFIG_FILE")
 
         local queued_jobs
         queued_jobs=$(get_org_queued_jobs "$org")
 
         # Check for API error
         if [ "$queued_jobs" -eq -1 ]; then
-            echo "[ORG: $org] API ERROR - skipping (rate limit or auth failure?)"
+            echo "[ORG: $config_key] API ERROR - skipping (rate limit or auth failure?)"
             continue
         fi
 
         # Only check registered runners if there are queued jobs (reduces API calls)
         if [ "$queued_jobs" -gt 0 ]; then
             # Use GitHub API to get runner count (works across multiple orchestrators)
+            # Filter by label if one is specified
             local total_runners
-            total_runners=$(get_org_runner_count "$org")
-            echo "[ORG: $org] Queued: $queued_jobs, Runners: $total_runners, Max: $max_count"
+            total_runners=$(get_org_runner_count "$org" "$label")
+
+            if [ -n "$label" ]; then
+                echo "[ORG: $org:$label] Queued: $queued_jobs, Runners: $total_runners, Max: $max_count"
+            else
+                echo "[ORG: $org] Queued: $queued_jobs, Runners: $total_runners, Max: $max_count"
+            fi
         else
-            echo "[ORG: $org] Queued: 0 (idle)"
+            if [ -n "$label" ]; then
+                echo "[ORG: $org:$label] Queued: 0 (idle)"
+            else
+                echo "[ORG: $org] Queued: 0 (idle)"
+            fi
             continue
         fi
 
@@ -449,13 +600,13 @@ process_orgs() {
             for i in $(seq 1 $runners_to_spawn); do
                 # Re-check runner count before each spawn (another orchestrator may have spawned)
                 local current_runners
-                current_runners=$(get_org_runner_count "$org")
+                current_runners=$(get_org_runner_count "$org" "$label")
                 if [ "$current_runners" -ge "$max_count" ]; then
                     echo "  Ceiling reached ($current_runners/$max_count), stopping spawns"
                     break
                 fi
 
-                spawn_org_runner "$org" "$cpus" "$ram" || echo "  (continuing despite error)"
+                spawn_org_runner "$org" "$cpus" "$ram" "$label" || echo "  (continuing despite error)"
                 # Small delay between spawns to avoid rate limiting
                 sleep 2
             done
@@ -479,6 +630,13 @@ echo ""
 # Main loop
 while true; do
     echo "--- $(date '+%Y-%m-%d %H:%M:%S') ---"
+
+    # Show current thread usage if max_threads is set
+    if [ "$MAX_THREADS" -gt 0 ]; then
+        local current_threads
+        current_threads=$(get_current_thread_usage)
+        echo "Thread usage: $current_threads / $MAX_THREADS"
+    fi
 
     # First, cleanup any exited runners (local containers only)
     cleanup_exited_runners
