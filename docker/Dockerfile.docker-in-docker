@@ -6,7 +6,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 # Install required packages
 RUN apt update -y && apt upgrade -y && \
-    apt install -y curl git apt-transport-https iptables ca-certificates software-properties-common
+    apt install -y curl git apt-transport-https iptables ca-certificates software-properties-common bc
 
 # Setup Docker CLI
 COPY --from=dind /usr/local/bin/docker /usr/local/bin/
