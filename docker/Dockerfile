@@ -3,7 +3,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 # Install required packages including Docker CLI
 RUN apt update -y && apt upgrade -y && \
-    apt install -y curl git gosu apt-transport-https ca-certificates gnupg lsb-release
+    apt install -y curl git gosu apt-transport-https ca-certificates gnupg lsb-release bc
 
 # Set up Docker repository and install Docker CLI
 RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg && \

@@ -4,7 +4,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 # Install required packages
 RUN apt update -y && apt upgrade -y && \
-    apt install -y curl docker.io jq openssl
+    apt install -y curl docker.io jq openssl bc
 
 # Copy controller script
 COPY runner-controller.sh /runner-controller.sh
