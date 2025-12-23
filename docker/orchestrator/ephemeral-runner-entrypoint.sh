@@ -90,12 +90,36 @@ trap cleanup INT TERM
 
 echo ""
 echo "Starting ephemeral runner - will process ONE job then exit..."
+echo "Idle timeout: 180 seconds (if no job picked up)"
 echo ""
 
-# Run the runner - it will exit after completing one job due to --ephemeral
-./run.sh
+# Start idle timeout watchdog
+# If the runner doesn't pick up a job within 3 minutes, kill it
+IDLE_TIMEOUT="${RUNNER_IDLE_TIMEOUT:-180}"
+(
+    sleep $IDLE_TIMEOUT
+    # Check if we're still in the initial state (no job started)
+    # The _diag directory gets Worker_*.log files when a job starts
+    if ! ls /home/docker/actions-runner/_diag/Worker_*.log 1>/dev/null 2>&1; then
+        echo ""
+        echo "TIMEOUT: No job picked up within ${IDLE_TIMEOUT} seconds. Exiting..."
+        # Kill the runner process
+        pkill -f "Runner.Listener" 2>/dev/null || true
+        exit 1
+    fi
+) &
+WATCHDOG_PID=$!
 
+# Run the runner - it will exit after completing one job due to --ephemeral
+./run.sh &
+RUNNER_PID=$!
+
+# Wait for runner to finish
+wait $RUNNER_PID
 EXIT_CODE=$?
+
+# Kill watchdog if still running
+kill $WATCHDOG_PID 2>/dev/null || true
 
 echo ""
 echo "Job completed with exit code: $EXIT_CODE"
