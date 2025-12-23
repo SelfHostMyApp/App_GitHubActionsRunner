@@ -94,12 +94,12 @@ trap cleanup INT TERM
 
 echo ""
 echo "Starting ephemeral runner - will process ONE job then exit..."
-echo "Idle timeout: 300 seconds (if no job picked up)"
+echo "Idle timeout: 120 seconds (if no job picked up)"
 echo ""
 
 # Start idle timeout watchdog
 # If the runner doesn't pick up a job within 3 minutes, kill it
-IDLE_TIMEOUT="${RUNNER_IDLE_TIMEOUT:-300}"
+IDLE_TIMEOUT="${RUNNER_IDLE_TIMEOUT:-120}"
 (
     sleep "$IDLE_TIMEOUT"
     # Check if we're still in the initial state (no job started)
