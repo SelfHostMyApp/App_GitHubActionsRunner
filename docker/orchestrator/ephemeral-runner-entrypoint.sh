@@ -54,25 +54,29 @@ echo "Configuring ephemeral runner..."
 echo "  URL: ${GITHUB_URL}"
 echo "  Name: ${RUNNER_NAME}"
 
-# Build label argument
-LABEL_ARG=""
-if [ -n "$RUNNER_LABELS" ]; then
-    LABEL_ARG="--labels ${RUNNER_LABELS}"
-fi
-
 # Configure the runner with --ephemeral flag
 # This is the key - ephemeral runners:
 # - Accept only ONE job
 # - Automatically deregister after the job completes
 # - Perfect for cache-free execution
-./config.sh \
-    --url "${GITHUB_URL}" \
-    --token "${GITHUB_ACTIONS_RUNNER_REGISTRATION_TOKEN}" \
-    --name "${RUNNER_NAME}" \
-    --unattended \
-    --ephemeral \
-    --disableupdate \
-    "${LABEL_ARG}"
+if [ -n "$RUNNER_LABELS" ]; then
+    ./config.sh \
+        --url "${GITHUB_URL}" \
+        --token "${GITHUB_ACTIONS_RUNNER_REGISTRATION_TOKEN}" \
+        --name "${RUNNER_NAME}" \
+        --labels "${RUNNER_LABELS}" \
+        --unattended \
+        --ephemeral \
+        --disableupdate
+else
+    ./config.sh \
+        --url "${GITHUB_URL}" \
+        --token "${GITHUB_ACTIONS_RUNNER_REGISTRATION_TOKEN}" \
+        --name "${RUNNER_NAME}" \
+        --unattended \
+        --ephemeral \
+        --disableupdate
+fi
 
 if [ $? -ne 0 ]; then
     echo "ERROR: Failed to configure the runner"
