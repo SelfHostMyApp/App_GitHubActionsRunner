@@ -14,7 +14,7 @@
 # set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+cd "$SCRIPT_DIR" || exit
 
 # Trap errors and show them
 trap 'echo ""; echo "ERROR: Script failed at line $LINENO. Exit code: $?"; read -p "Press Enter to exit..."' ERR
@@ -164,17 +164,17 @@ build_images() {
 
     # Build base image first (shared by orchestrator and ephemeral runner)
     log_info "Building base image..."
-    $RUNTIME build -t gh-runner-base:latest -f Dockerfile.base .
+    $RUNTIME build --network=host -t gh-runner-base:latest -f Dockerfile.base .
 
     # Build orchestrator and ephemeral runner in parallel
     log_info "Building orchestrator and ephemeral runner images (parallel)..."
 
     # Start both builds in background
-    $RUNTIME build -t gh-orchestrator:latest -f Dockerfile.orchestrator \
+    $RUNTIME build --network=host -t gh-orchestrator:latest -f Dockerfile.orchestrator \
         --build-arg BASE_IMAGE=gh-runner-base:latest . &
     BUILD_ORCH_PID=$!
 
-    $RUNTIME build -t gh-ephemeral-runner:latest -f Dockerfile.ephemeral-runner \
+    $RUNTIME build --network=host -t gh-ephemeral-runner:latest -f Dockerfile.ephemeral-runner \
         --build-arg BASE_IMAGE=gh-runner-base:latest \
         --build-arg RUNNER_VERSION="$RUNNER_VERSION" . &
     BUILD_RUNNER_PID=$!
@@ -235,7 +235,7 @@ start_without_compose() {
         --name gh-orchestrator \
         --network github-runners \
         --restart unless-stopped \
-        $socket_mount \
+        "$socket_mount" \
         -v "$(pwd)/config.json:/config/config.json:ro" \
         -e GITHUB_PAT="$GITHUB_PAT" \
         -e POLL_INTERVAL="${POLL_INTERVAL:-30}" \
@@ -272,8 +272,8 @@ stop() {
 
     # Also stop any orphaned ephemeral runners
     log_info "Stopping any orphaned ephemeral runners..."
-    $RUNTIME ps --filter "name=eph-" -q 2>/dev/null | xargs -r $RUNTIME stop 2>/dev/null || true
-    $RUNTIME ps -a --filter "name=eph-" -q 2>/dev/null | xargs -r $RUNTIME rm 2>/dev/null || true
+    $RUNTIME ps --filter "name=eph-" -q 2>/dev/null | xargs -r "$RUNTIME" stop 2>/dev/null || true
+    $RUNTIME ps -a --filter "name=eph-" -q 2>/dev/null | xargs -r "$RUNTIME" rm 2>/dev/null || true
 
     log_info "Stopped"
 }
