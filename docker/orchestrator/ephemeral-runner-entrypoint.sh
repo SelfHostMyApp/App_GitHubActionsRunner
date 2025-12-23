@@ -72,7 +72,7 @@ fi
     --unattended \
     --ephemeral \
     --disableupdate \
-    ${LABEL_ARG}
+    "${LABEL_ARG}"
 
 if [ $? -ne 0 ]; then
     echo "ERROR: Failed to configure the runner"
@@ -90,14 +90,14 @@ trap cleanup INT TERM
 
 echo ""
 echo "Starting ephemeral runner - will process ONE job then exit..."
-echo "Idle timeout: 180 seconds (if no job picked up)"
+echo "Idle timeout: 60 seconds (if no job picked up)"
 echo ""
 
 # Start idle timeout watchdog
 # If the runner doesn't pick up a job within 3 minutes, kill it
-IDLE_TIMEOUT="${RUNNER_IDLE_TIMEOUT:-180}"
+IDLE_TIMEOUT="${RUNNER_IDLE_TIMEOUT:-60}"
 (
-    sleep $IDLE_TIMEOUT
+    sleep "$IDLE_TIMEOUT"
     # Check if we're still in the initial state (no job started)
     # The _diag directory gets Worker_*.log files when a job starts
     if ! ls /home/docker/actions-runner/_diag/Worker_*.log 1>/dev/null 2>&1; then
@@ -128,4 +128,4 @@ echo "Ephemeral runner shutting down..."
 # The runner automatically deregisters with --ephemeral, but call cleanup just in case
 cleanup
 
-exit $EXIT_CODE
+exit "$EXIT_CODE"
