@@ -333,10 +333,10 @@ spawn_repo_runner() {
     fi
 
     # Generate unique runner ID (must be <= 64 chars for GitHub)
-    # Format: eph-r-{slug (truncated to 45 chars)}-{8 char hex}
-    local short_slug="${repo_slug:0:45}"
+    # Format: eph-r-{cpus}c-{slug (truncated)}-{8 char hex}
+    local short_slug="${repo_slug:0:42}"
     local rand_hex=$(head -c 4 /dev/urandom | xxd -p)
-    local runner_id="eph-r-${short_slug}-${rand_hex}"
+    local runner_id="eph-r-${cpus}c-${short_slug}-${rand_hex}"
 
     echo "  Spawning repo runner: $runner_id"
     echo "    Target: $owner_repo"
@@ -410,10 +410,10 @@ spawn_org_runner() {
     fi
 
     # Generate unique runner ID (must be <= 64 chars for GitHub)
-    # Format: eph-o-{org (truncated to 45 chars)}-{8 char hex}
-    local short_slug="${org_slug:0:45}"
+    # Format: eph-o-{cpus}c-{org (truncated)}-{8 char hex}
+    local short_slug="${org_slug:0:42}"
     local rand_hex=$(head -c 4 /dev/urandom | xxd -p)
-    local runner_id="eph-o-${short_slug}-${rand_hex}"
+    local runner_id="eph-o-${cpus}c-${short_slug}-${rand_hex}"
 
     echo "  Spawning org runner: $runner_id"
     echo "    Target: $org (organization)"
